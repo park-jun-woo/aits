@@ -1,7 +1,3 @@
-Of course, here is the English version of the README.md file, written in markdown.
-
------
-
 # AITS Framework
 
 > The first framework of AI, by AI, for AI.
