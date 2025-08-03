@@ -1,0 +1,18 @@
+import { AitsElement } from './AitsElement';
+/**
+ * <ai-nav>: 내비게이션 메뉴를 감싸는 컨테이너.
+ */
+class AitsNav extends AitsElement {
+    constructor() {
+        super();
+    }
+    protected render() {
+        this.shadow.innerHTML = `
+            <style>
+                :host { display: flex; align-items: center; gap: 1rem; }
+            </style>
+            <slot></slot>
+        `;
+    }
+}
+customElements.define('ai-nav', AitsNav);
