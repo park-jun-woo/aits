@@ -1,4 +1,10 @@
 {
+  "name": "aits",
+  "version": "0.1.0",
+  "description": "The first AI-native TypeScript SPA framework, designed for development AI agents.",
+  "main": "dist/index.js",
+  "type": "module",
+  "license": "MIT",
   "dependencies": {
     "navigo": "^8.11.1"
   }
