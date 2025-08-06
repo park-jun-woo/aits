@@ -2,10 +2,43 @@
   "name": "aits",
   "version": "0.1.0",
   "description": "The first AI-native TypeScript SPA framework, designed for development AI agents.",
-  "main": "dist/index.js",
   "type": "module",
   "license": "MIT",
+  
+  "main": "./dist/aits.js", 
+  "types": "./dist/aits.d.ts",
+
+  "exports": {
+    ".": {
+      "import": "./dist/aits.js",
+      "types": "./dist/aits.d.ts"
+    },
+    "./controller": {
+      "import": "./dist/Controller.js",
+      "types": "./dist/Controller.d.ts"
+    },
+    "./model": {
+      "import": "./dist/Model.js",
+      "types": "./dist/Model.d.ts"
+    }
+  },
+
+  "files": [
+    "dist"
+  ],
+
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build && tsc --emitDeclarationOnly",
+    "preview": "vite preview"
+  },
+
   "dependencies": {
     "navigo": "^8.11.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.2.2",
+    "vite": "^5.4.19",
+    "@types/node": "^20.0.0" 
   }
 }

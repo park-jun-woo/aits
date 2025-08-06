@@ -11,7 +11,7 @@
  * @version 0.1.0
  */
 import type { Aits } from './Aits';
-import type { IApiAdapter, AitsStandardPaginationOptions } from './ApiAdapter';
+import type { IApiAdapter, AitsPaginationOptions } from './ApiAdapter';
 
 export abstract class Model {
     protected aits: Aits;
@@ -76,9 +76,9 @@ export abstract class Model {
      * 페이지네이션이 적용된 목록 조회를 위한 표준 헬퍼 메소드.
      * 내부적으로 API 어댑터를 사용하여 파라미터를 변환합니다.
      */
-    public getPaged<T>(options: AitsStandardPaginationOptions = {}): Promise<T> {
+    public getPaged<T>(options: AitsPaginationOptions = {}): Promise<T> {
         // 1. Aits 표준 옵션을 어댑터에게 전달하여,
-        const backendParams = this.apiAdapter.transformPaginationParams(options);
+        const backendParams = this.apiAdapter.transformDataOptions(options);
         
         // 2. 백엔드에 맞는 파라미터로 변환된 결과를 받아 API를 호출합니다.
         return this.get<T>('', backendParams);

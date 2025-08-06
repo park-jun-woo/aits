@@ -12,22 +12,104 @@
 import type { Aits } from './Aits';
 
 // 로드된 View를 캐싱하기 위한 타입 정의
-type ViewCacheEntry = {
+type CacheEntry = {
     promise: Promise<HTMLElement>;
 };
 
 export class Loader {
     private aits: Aits;
-    private viewCache: Map<string, ViewCacheEntry>;
-    private modelCache: Map<string, Promise<any>>;
+    private layoutCache: Map<string, CacheEntry>;
+    private viewCache: Map<string, CacheEntry>;
     private viewUsage: Map<string, number>; // 뷰의 마지막 사용 시간을 기록 (for LRU)
     private readonly MAX_VIEWS_IN_CACHE: number = 10; // 메모리에 유지할 최대 뷰 개수
 
     public constructor(aitsInstance: Aits) {
         this.aits = aitsInstance;
+        this.layoutCache = new Map();
         this.viewCache = new Map();
-        this.modelCache = new Map();
         this.viewUsage = new Map();
+    }
+
+    /**
+     * Header HTML 파일을 로드하여 DOM 최상단에 추가합니다.
+     * @param src - 로드할 HTML 파일의 경로
+     * @param onLoad - 헤더가 DOM에 추가된 후 실행될 콜백 함수
+     * @returns 헤더의 HTMLElement를 resolve하는 Promise
+     */
+    public async header(src: string, onLoad?: (el: HTMLElement) => void): Promise<HTMLElement> {
+        const cacheKey = `layout:${src}`;
+
+        // 1. layoutCache 확인
+        if (this.layoutCache.has(cacheKey)) {
+            // 캐시된 Promise를 반환하여 중복 실행 방지
+            return this.layoutCache.get(cacheKey)!.promise;
+        }
+
+        // 2. Promise를 생성하고 바로 캐시에 저장
+        const promise = new Promise<HTMLElement>(async (resolve, reject) => {
+            try {
+                document.body.querySelector('header')?.remove();
+                const html = await this._fetchHtml(src);
+                const element = this._createElementFromHtml(html);
+                const headerElement = element.tagName === 'HEADER' ? element : this._wrapInTag(element, 'header');
+                
+                document.body.insertAdjacentElement('afterbegin', headerElement);
+
+                onLoad?.(headerElement);
+                this.aits.updatePageLinks();
+                resolve(headerElement);
+            } catch (err) {
+                // 실패 시 캐시에서 제거
+                this.layoutCache.delete(cacheKey);
+                reject(err);
+            }
+        });
+
+        this.layoutCache.set(cacheKey, { promise });
+        return promise;
+    }
+
+    /**
+     * Footer HTML 파일을 로드하여 DOM 최하단에 추가합니다.
+     * @param src - 로드할 HTML 파일의 경로
+     * @param onLoad - 푸터가 DOM에 추가된 후 실행될 콜백 함수
+     * @returns 푸터의 HTMLElement를 resolve하는 Promise
+     */
+    public async footer(src: string, onLoad?: (el: HTMLElement) => void): Promise<HTMLElement> {
+        const cacheKey = `layout:footer:${src}`;
+
+        // 1. layoutCache에 동일한 푸터가 있는지 확인
+        if (this.layoutCache.has(cacheKey)) {
+            return this.layoutCache.get(cacheKey)!.promise;
+        }
+
+        // 2. Promise를 생성하고 즉시 캐시에 저장하여 중복 호출 방지
+        const promise = new Promise<HTMLElement>(async (resolve, reject) => {
+            try {
+                // 기존 footer가 있다면 제거
+                document.body.querySelector('footer')?.remove();
+                
+                const html = await this._fetchHtml(src);
+                const element = this._createElementFromHtml(html);
+                
+                // <footer> 태그로 감싸져 있는지 확인하고, 아니면 감싸기
+                const footerElement = element.tagName === 'FOOTER' ? element : this._wrapInTag(element, 'footer');
+                
+                // body의 가장 마지막 자식으로 삽입
+                document.body.appendChild(footerElement);
+
+                onLoad?.(footerElement);
+                this.aits.updatePageLinks();
+                resolve(footerElement);
+            } catch (err) {
+                // 실패 시 캐시에서 제거
+                this.layoutCache.delete(cacheKey);
+                reject(err);
+            }
+        });
+
+        this.layoutCache.set(cacheKey, { promise });
+        return promise;
     }
 
     /**
@@ -79,37 +161,16 @@ export class Loader {
     }
 
     /**
-     * JavaScript 모듈(Model)을 동적으로 import하고, 인스턴스화하여 캐싱합니다.
-     * @param src - 로드할 JS 모듈 파일의 경로
-     * @returns 모듈의 기본 export(주로 클래스 인스턴스)를 resolve하는 Promise
+     * JSON 파일을 fetch API로 로드하여 파싱합니다.
+     * @param src - 로드할 JSON 파일의 경로
      */
-    public async model(src: string): Promise<any> {
-        const cacheKey = `model:${src}`;
-
-        // 1. 캐시 확인
-        if (this.modelCache.has(cacheKey)) {
-            return this.modelCache.get(cacheKey)!;
+    public async json(src: string): Promise<any> {
+        const url = this._toAbsoluteUrl(src);
+        const response = await fetch(url);
+        if (!response.ok) {
+            throw new Error(`Failed to fetch JSON: ${src} - ${response.statusText}`);
         }
-
-        // 2. 캐시 없음: 새로운 모듈 import
-        const promise = import(this._toAbsoluteUrl(src))
-            .then(module => {
-                const Exported = module.default ?? module;
-                // export된 것이 클래스(함수)이면 new로 인스턴스화, 아니면 그대로 사용
-                try {
-                    return typeof Exported === 'function' ? new Exported(this.aits) : Exported;
-                } catch {
-                    return Exported;
-                }
-            })
-            .catch(err => {
-                this.modelCache.delete(cacheKey);
-                throw err;
-            });
-        
-        // 3. 캐시에 Promise 저장
-        this.modelCache.set(cacheKey, promise);
-        return promise;
+        return response.json();
     }
 
     /**
@@ -148,20 +209,16 @@ export class Loader {
         });
     }
 
-    /**
-     * JSON 파일을 fetch API로 로드하여 파싱합니다.
-     * @param src - 로드할 JSON 파일의 경로
-     */
-    public async json(src: string): Promise<any> {
-        const url = this._toAbsoluteUrl(src);
-        const response = await fetch(url);
-        if (!response.ok) {
-            throw new Error(`Failed to fetch JSON: ${src} - ${response.statusText}`);
-        }
-        return response.json();
-    }
-
     // --- Private Helper Methods ---
+
+    /**
+     * 특정 태그로 요소를 감싸는 헬퍼 메소드
+     */
+    private _wrapInTag(element: HTMLElement, tagName: 'header' | 'footer' | 'section'): HTMLElement {
+        const wrapper = document.createElement(tagName);
+        wrapper.appendChild(element);
+        return wrapper;
+    }
 
     /**
      * URL로부터 HTML 콘텐츠를 가져옵니다.
@@ -186,7 +243,7 @@ export class Loader {
     /**
      * 뷰를 캐시에 저장하고, 캐시 크기가 최대치를 초과하면 오래된 뷰를 제거합니다.
      */
-    private _cacheView(key: string, entry: ViewCacheEntry): void {
+    private _cacheView(key: string, entry: CacheEntry): void {
         this.viewCache.set(key, entry);
         this.viewUsage.set(key, Date.now());
         if (this.viewCache.size > this.MAX_VIEWS_IN_CACHE) {

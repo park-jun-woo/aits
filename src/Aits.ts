@@ -11,9 +11,10 @@
  */
 
 import Navigo from 'navigo'; // 강력하고 유연한 클라이언트 사이드 라우터
-import { Loader } from './Loader'; // 모든 리소스 로딩을 담당 (추후 작성)
+import { Loader } from './Loader'; // 모든 리소스 로딩을 담당
 import { Context } from './Context'; // 컨트롤러에게 주입될 실행 컨텍스트
-import { Controller } from './Controller'; // 모든 컨트롤러의 기반 클래스 (추후 작성)
+import { Controller } from './Controller'; // 모든 컨트롤러의 기반 클래스
+import { Model } from './Model'; // 모든 모델의 기반 클래스
 import { IApiAdapter, DefaultApiAdapter } from './ApiAdapter'; // ApiAdapter import
 
 // 라우팅 규칙을 정의하기 위한 타입
@@ -28,6 +29,8 @@ export class Aits {
     private loader: Loader;
     public apiAdapter: IApiAdapter; // API 어댑터를 public으로 설정
     private controllers: Map<string, Promise<Controller>>;
+    private models: Map<string, Model>;
+    private modelPaths: Map<string, string>;
     private activeController: Controller | null;
     private isRunning: boolean;
 
@@ -36,6 +39,8 @@ export class Aits {
         this.loader = new Loader(this);
         this.apiAdapter = new DefaultApiAdapter(); // 기본 어댑터 설정
         this.controllers = new Map();
+        this.models = new Map();
+        this.modelPaths = new Map();
         this.activeController = null;
         this.isRunning = false;
 
@@ -54,6 +59,67 @@ export class Aits {
      */
     public setApiAdapter(adapter: IApiAdapter): void {
         this.apiAdapter = adapter;
+    }
+
+    /**
+     * (기존) 모델 인스턴스를 직접 등록하는 메소드 (정적 로딩)
+     */
+    public model(name: string, modelInstance: any): void {
+        if (this.modelPaths.has(name)) {
+            console.warn(`[Aits] Model '${name}' was already registered by path. The instance registration will be ignored.`);
+            return;
+        }
+        this.models.set(name, modelInstance);
+    }
+
+    /**
+     * (신규) 모델 이름과 파일 경로를 등록하는 메소드 (동적 로딩)
+     * @param name - 모델을 식별할 이름 (e.g., 'StatisticsModel')
+     * @param path - 컨트롤러에서 사용하는 것과 동일한 형식의 경로 (e.g., './model/StatisticsModel')
+     */
+    public modelByPath(name: string, path: string): void {
+        if (this.models.has(name)) {
+            console.warn(`[Aits] Model '${name}' was already registered as an instance. The path registration will be ignored.`);
+            return;
+        }
+        this.modelPaths.set(name, path);
+    }
+
+    /**
+     * (수정) 등록된 모델 인스턴스를 가져옵니다.
+     * 경로로 등록된 경우, 동적으로 로드하고 결과를 캐싱합니다.
+     */
+    public async getModel<T>(name: string): Promise<T> {
+        // 1. 이미 인스턴스가 캐시되어 있으면 즉시 반환
+        if (this.models.has(name)) {
+            return this.models.get(name) as T;
+        }
+
+        // 2. 경로가 등록되어 있다면, 동적으로 import하여 인스턴스화
+        if (this.modelPaths.has(name)) {
+            const modelPath = this.modelPaths.get(name)!;
+            try {
+                // Vite는 확장자 없는 동적 import를 잘 처리해 줍니다.
+                const module = await import(/* @vite-ignore */ modelPath);
+                const ModelClass = module.default;
+                
+                if (typeof ModelClass !== 'function') {
+                    throw new Error(`Module at '${modelPath}' does not have a default export that is a class.`);
+                }
+
+                const modelInstance = new ModelClass(this);
+                
+                // 3. 한 번 로드된 모델은 다음을 위해 인스턴스로 캐시합니다.
+                this.models.set(name, modelInstance);
+
+                return modelInstance as T;
+            } catch (err) {
+                console.error(`[Aits] Failed to load model '${name}' from path '${modelPath}':`, err);
+                throw err;
+            }
+        }
+
+        throw new Error(`[Aits] Model '${name}' is not registered.`);
     }
 
     /**
@@ -125,7 +191,7 @@ export class Aits {
 
     /**
      * 컨트롤러 파일을 동적으로 로드하고 인스턴스를 생성합니다.
-     * 컨트롤러의 `required` 의존성을 먼저 해결한 후 `init`을 호출합니다.
+     * 컨트롤러의 `required` 의존성을 먼저 해결한 후 `onLoad`을 호출합니다.
      * @param controllerPath - 컨트롤러 파일 경로
      */
     private async loadController(controllerPath: string): Promise<Controller> {
@@ -179,13 +245,16 @@ export class Aits {
     }
 
     // --- Loader 프록시 메소드들 ---
-    // 컨트롤러가 this.aits.loader.view() 대신 this.aits.view()로 편하게 호출하도록 제공
-    public view(src: string, onLoad?: (el: HTMLElement) => void) {
-        return this.loader.view(src, onLoad);
+    public header(src: string, onLoad?: (el: HTMLElement) => void) {
+        return this.loader.header(src, onLoad);
+    }
+    
+    public footer(src: string, onLoad?: (el: HTMLElement) => void) {
+        return this.loader.footer(src, onLoad);
     }
 
-    public model(src: string) {
-        return this.loader.model(src);
+    public view(src: string, onLoad?: (el: HTMLElement) => void) {
+        return this.loader.view(src, onLoad);
     }
     
     public json(src: string) {

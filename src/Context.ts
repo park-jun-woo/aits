@@ -106,15 +106,27 @@ export class Context {
     }
 
     // --- Loader 프록시 메소드 ---
-    public view(src: string, onLoad?: (el: HTMLElement) => void) {
-        return this.aits.view(src, onLoad);
+    public header(src: string, onLoad?: (el: HTMLElement) => void) {
+        return this.aits.header(src, onLoad);
+    }
+    
+    public footer(src: string, onLoad?: (el: HTMLElement) => void) {
+        return this.aits.footer(src, onLoad);
     }
 
-    public model(src: string) {
-        return this.aits.model(src);
+    public view(src: string, onLoad?: (el: HTMLElement) => void) {
+        return this.aits.view(src, onLoad);
     }
     
     public json(src: string) {
         return this.aits.json(src);
+    }
+    
+    public js(src: string) {
+        return this.aits.js(src);
+    }
+    
+    public css(src: string) {
+        return this.aits.css(src);
     }
 }
