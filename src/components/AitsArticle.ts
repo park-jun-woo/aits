@@ -1,6 +1,6 @@
 import { AitsElement } from './AitsElement';
 /**
- * <ai-article>: 단일 데이터(게시물 등)를 표시하는 컴포넌트.
+ * <aits-article>: 단일 데이터(게시물 등)를 표시하는 컴포넌트.
  * Controller가 직접 data 프로퍼티를 통해 데이터를 주입합니다.
  */
 class AitsArticle extends AitsElement {
@@ -26,4 +26,4 @@ class AitsArticle extends AitsElement {
         this.shadow.innerHTML = this.simpleTemplate(template, this._data);
     }
 }
-customElements.define('ai-article', AitsArticle);
+customElements.define('aits-article', AitsArticle, { extends: 'article' });

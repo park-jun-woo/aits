@@ -1,6 +1,6 @@
 import { AitsElement } from './AitsElement';
 /**
- * <ai-page>: 라우팅의 단위가 되는 최상위 컨테이너.
+ * <main is="aits-page">: 라우팅의 단위가 되는 최상위 컨테이너.
  * 내부에 슬롯을 두어 자식 요소들을 그대로 표시합니다.
  */
 class AitsPage extends AitsElement {
@@ -20,4 +20,4 @@ class AitsPage extends AitsElement {
         `;
     }
 }
-customElements.define('ai-page', AitsPage);
+customElements.define('aits-page', AitsPage, { extends: 'main' });

@@ -1,6 +1,6 @@
 import { AitsElement } from './AitsElement';
 /**
- * <ai-search>: 검색 입력을 위한 컴포넌트.
+ * <aits-search>: 검색 입력을 위한 컴포넌트.
  */
 class AitsSearch extends AitsElement {
     connectedCallback() {
@@ -20,4 +20,4 @@ class AitsSearch extends AitsElement {
         `;
     }
 }
-customElements.define('ai-search', AitsSearch);
+customElements.define('aits-search', AitsSearch);

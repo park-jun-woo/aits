@@ -1,6 +1,6 @@
 import { AitsElement } from './AitsElement';
 /**
- * <ai-more>: '더보기' 기능을 위한 컴포넌트.
+ * <button is="aits-more">: '더보기' 기능을 위한 컴포넌트.
  */
 class AitsMore extends AitsElement {
     connectedCallback() {
@@ -14,4 +14,4 @@ class AitsMore extends AitsElement {
         this.shadow.innerHTML = `<button><slot>More</slot></button>`;
     }
 }
-customElements.define('ai-more', AitsMore);
+customElements.define('aits-more', AitsMore, { extends: 'button' });

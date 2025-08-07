@@ -34,8 +34,8 @@ export class Context {
         const urlParams = new URLSearchParams(navigoMatch.queryString || '');
         this.route = {
             url: navigoMatch.url || '',
-            path: navigoMatch.route.path,
-            route: navigoMatch.route.name,
+            path: navigoMatch.route?.path || '',
+            route: navigoMatch.route?.name || '',
             params: navigoMatch.data || null,
             query: Object.fromEntries(urlParams.entries()),
         };

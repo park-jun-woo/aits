@@ -1,6 +1,6 @@
 import { AitsElement } from './AitsElement';
 /**
- * <ai-order>: 목록 정렬을 위한 컴포넌트.
+ * <aits-order>: 목록 정렬을 위한 컴포넌트.
  */
 class AitsOrder extends AitsElement {
     connectedCallback() {
@@ -18,4 +18,4 @@ class AitsOrder extends AitsElement {
         this.shadow.innerHTML = `<button><slot></slot></button>`;
     }
 }
-customElements.define('ai-order', AitsOrder);
+customElements.define('aits-order', AitsOrder);

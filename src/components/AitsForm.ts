@@ -1,6 +1,6 @@
 import { AitsElement } from './AitsElement';
 /**
- * <ai-form>: 데이터 제출을 위한 폼 컨테이너.
+ * <form is="aits-form">: 데이터 제출을 위한 폼 컨테이너.
  */
 class AitsForm extends AitsElement {
     connectedCallback() {
@@ -35,4 +35,4 @@ class AitsForm extends AitsElement {
         this.appendChild(formElement);
     }
 }
-customElements.define('ai-form', AitsForm);
+customElements.define('aits-form', AitsForm, { extends: 'form' });

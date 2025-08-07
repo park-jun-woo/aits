@@ -1,6 +1,6 @@
 import { AitsElement } from './AitsElement';
 /**
- * <ai-nav>: 내비게이션 메뉴를 감싸는 컨테이너.
+ * <nav is="aits-nav">: 내비게이션 메뉴를 감싸는 컨테이너.
  */
 class AitsNav extends AitsElement {
     constructor() {
@@ -15,4 +15,4 @@ class AitsNav extends AitsElement {
         `;
     }
 }
-customElements.define('ai-nav', AitsNav);
+customElements.define('aits-nav', AitsNav, { extends: 'nav' });
