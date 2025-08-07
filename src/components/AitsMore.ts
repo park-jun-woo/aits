@@ -11,7 +11,7 @@ class AitsMore extends AitsElement {
     }
 
     protected render() {
-        this.shadow.innerHTML = `<button><slot>More</slot></button>`;
+        this.shadow.innerHTML = `<slot>More</slot>`;
     }
 }
 customElements.define('aits-more', AitsMore, { extends: 'button' });

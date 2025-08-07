@@ -15,7 +15,7 @@ class AitsOrder extends AitsElement {
 
     protected render() {
         // 스타일링을 위해 버튼으로 감쌀 수 있음
-        this.shadow.innerHTML = `<button><slot></slot></button>`;
+        this.shadow.innerHTML = `<slot></slot>`;
     }
 }
 customElements.define('aits-order', AitsOrder);
