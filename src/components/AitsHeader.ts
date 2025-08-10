@@ -11,46 +11,67 @@ class AitsHeader extends AitsElement {
         super();
     }
 
+    /**
+     * 1. 부모의 render()를 호출하여 데이터 바인딩된 템플릿으로 Shadow DOM을 채웁니다.
+     * 2. 그 후에 AitsHeader 고유의 스타일만 Shadow DOM의 맨 앞에 추가합니다.
+     */
     protected render() {
-        this.shadow.innerHTML = `
-            <style>
-                :host {
-                    position: fixed;
-                    width: 100%;
-                    top: 0;
-                    left: 0;
-                    box-sizing: border-box; /* padding이 너비에 포함되도록 설정 */
+        // 1. 부모 클래스의 render()를 호출합니다.
+        //    이 시점에 this.shadow.innerHTML은 데이터가 적용된 템플릿으로 채워집니다.
+        super.render();
 
-                    display: flex;
-                    align-items: center;
-                    padding: 10px 20px;
-                    background-color: var(--surface-color, #ffffff);
-                    border-bottom: 1px solid var(--border-color, #e5e7eb);
-                    z-index: 1000;
-                    user-select: none;
-                }
-                
-                ::slotted(a) {
-                    display: flex;
-                    align-items: center;
-                    text-decoration: none;
-                }
+        // 2. DOM 요소를 직접 생성하여 스타일을 주입합니다.
+        //    이 방식은 기존의 렌더링된 내용을 건드리지 않고 스타일만 추가하므로
+        //    더 효율적이고 안전합니다.
+        const style = document.createElement('style');
+        style.textContent = `
+            :host {
+                position: fixed;
+                width: 100%;
+                top: 0;
+                left: 0;
+                box-sizing: border-box;
+                display: flex;
+                align-items: center;
+                padding: 10px 20px;
+                background-color: var(--surface-color, #ffffff);
+                border-bottom: 1px solid var(--border-color, #e5e7eb);
+                z-index: 1000;
+                user-select: none;
+            }
+            
+            /* ::slotted() 대신 섀도 DOM 내부의 실제 태그를 직접 스타일링 합니다. */
+            a {
+                display: flex;
+                align-items: center;
+                text-decoration: none;
+                color: inherit; /* 링크 색상을 부모 요소와 동일하게 */
+            }
 
-                ::slotted(h1) {
-                    margin: 0;
-                    padding-left: 5px;
-                    font-size: 1.5rem;
-                    line-height: 2rem;
-                    font-weight: 700;
-                    color: var(--primary-900, #1e3a8a);
-                }
+            h1 {
+                margin: 0;
+                padding-left: 5px;
+                font-size: 1.5rem;
+                line-height: 2rem;
+                font-weight: 700;
+                color: var(--primary-900, #1e3a8a);
+            }
 
-                ::slotted(nav) {
-                    margin-left: auto;
-                }
-            </style>
-            <slot></slot>
+            nav {
+                margin-left: auto;
+            }
+            
+            nav ul {
+                display: flex;
+                list-style: none;
+                margin: 0;
+                padding: 0;
+                gap: 1rem;
+            }
         `;
+        
+        // 3. 렌더링된 콘텐츠의 맨 앞에 스타일 요소를 추가합니다.
+        this.shadow.prepend(style);
     }
 }
 

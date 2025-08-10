@@ -22,7 +22,7 @@ class AitsForm extends AitsElement {
 
     protected render() {
         // form 태그는 Light DOM에 있어야 하므로, slot을 사용
-        this.shadow.innerHTML = `<form><slot></slot></form>`;
+        this.shadow.innerHTML = `<slot></slot>`;
         // 실제 form 태그는 사용자가 HTML에 직접 작성
         const formElement = document.createElement('form');
         formElement.action = this.getAttribute('action') || '';
