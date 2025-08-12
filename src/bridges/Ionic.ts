@@ -13,8 +13,8 @@
 
 import { Bridge, BridgeConfig, ComponentTransform, ComponentTransformMap } from '../Bridge';
 
-// Ionic 컴포넌트 인터페이스 정의
-interface IonButton extends HTMLElement {
+// Ionic 컴포넌트 인터페이스 정의 - export로 외부에서 사용 가능
+export interface IonButton extends HTMLElement {
     color?: string;
     expand?: 'block' | 'full';
     fill?: 'clear' | 'default' | 'outline' | 'solid';
@@ -28,19 +28,23 @@ interface IonButton extends HTMLElement {
     routerDirection?: 'back' | 'forward' | 'root';
 }
 
-interface IonInput extends HTMLElement {
+// HTMLElement와 충돌하는 모든 속성 제외하고 재정의
+export interface IonInput extends Omit<HTMLElement, 
+    'autocapitalize' | 'autocorrect' | 'inputmode' | 'spellcheck' | 
+    'autofocus' | 'disabled' | 'multiple' | 'name' | 'placeholder' | 
+    'readonly' | 'required' | 'size' | 'step' | 'type' | 'value'> {
     accept?: string;
-    autocapitalize?: string;
+    autocapitalize?: 'off' | 'none' | 'on' | 'sentences' | 'words' | 'characters';
     autocomplete?: string;
-    autocorrect?: string;
+    autocorrect?: 'off' | 'on';
     autofocus?: boolean;
     clearInput?: boolean;
     clearOnEdit?: boolean;
     color?: string;
     debounce?: number;
     disabled?: boolean;
-    enterkeyhint?: string;
-    inputmode?: string;
+    enterkeyhint?: 'enter' | 'done' | 'go' | 'next' | 'previous' | 'search' | 'send';
+    inputmode?: 'none' | 'text' | 'tel' | 'url' | 'email' | 'numeric' | 'decimal' | 'search';
     max?: string;
     maxlength?: number;
     min?: string;
@@ -55,11 +59,11 @@ interface IonInput extends HTMLElement {
     size?: number;
     spellcheck?: boolean;
     step?: string;
-    type?: string;
+    type?: 'date' | 'datetime-local' | 'email' | 'month' | 'number' | 'password' | 'search' | 'tel' | 'text' | 'time' | 'url' | 'week';
     value?: string | number;
 }
 
-interface IonModal extends HTMLElement {
+export interface IonModal extends HTMLElement {
     animated?: boolean;
     backdropDismiss?: boolean;
     canDismiss?: boolean | (() => Promise<boolean>);
@@ -83,7 +87,7 @@ interface IonModal extends HTMLElement {
     onWillDismiss(): Promise<any>;
 }
 
-interface IonToast extends HTMLElement {
+export interface IonToast extends HTMLElement {
     animated?: boolean;
     buttons?: any[];
     color?: string;
@@ -108,7 +112,7 @@ interface IonToast extends HTMLElement {
     dismiss(data?: any, role?: string): Promise<boolean>;
 }
 
-interface IonLoading extends HTMLElement {
+export interface IonLoading extends HTMLElement {
     animated?: boolean;
     backdropDismiss?: boolean;
     cssClass?: string | string[];
@@ -834,6 +838,25 @@ export class IonicBridge extends Bridge {
         await (alert as any).present();
         
         return alert;
+    }
+    
+    /**
+     * 입력 필드 생성 (IonInput 인터페이스 사용)
+     */
+    static async createInput(options: Partial<IonInput> = {}): Promise<IonInput> {
+        const bridge = IonicBridge.getInstance();
+        await bridge.load();
+        
+        const input = document.createElement('ion-input') as IonInput;
+        
+        // 옵션 설정
+        Object.entries(options).forEach(([key, value]) => {
+            if (value !== undefined) {
+                (input as any)[key] = value;
+            }
+        });
+        
+        return input;
     }
     
     /**
