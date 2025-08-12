@@ -1,76 +1,144 @@
-// /aits/src/components/AitsHeader.ts
-
 import { AitsElement } from './AitsElement';
 
 /**
- * <header is="aits-header">: 페이지의 헤더 영역을 정의하는 컨테이너 컴포넌트.
- * 내부에 슬롯을 두어 자식 요소들을 그대로 표시합니다.
+ * AitsHeader - 헤더 영역
+ * <header is="aits-header">
  */
 export class AitsHeader extends AitsElement {
-    constructor() {
-        super();
+    static get observedAttributes() {
+        return ['fixed', 'transparent', 'shadow'];
     }
-
-    /**
-     * 1. 부모의 render()를 호출하여 데이터 바인딩된 템플릿으로 Shadow DOM을 채웁니다.
-     * 2. 그 후에 AitsHeader 고유의 스타일만 Shadow DOM의 맨 앞에 추가합니다.
-     */
-    protected render() {
-        // 1. 부모 클래스의 render()를 호출합니다.
-        //    이 시점에 this.shadow.innerHTML은 데이터가 적용된 템플릿으로 채워집니다.
-        super.render();
-
-        // 2. DOM 요소를 직접 생성하여 스타일을 주입합니다.
-        //    이 방식은 기존의 렌더링된 내용을 건드리지 않고 스타일만 추가하므로
-        //    더 효율적이고 안전합니다.
-        const style = document.createElement('style');
-        style.textContent = `
+    
+    protected getTemplate(): string {
+        return `
+            <div class="header-container" part="container">
+                <div class="header-brand" part="brand">
+                    <slot name="logo"></slot>
+                    <slot name="title"></slot>
+                </div>
+                
+                <nav class="header-nav" part="nav">
+                    <slot name="nav"></slot>
+                </nav>
+                
+                <div class="header-actions" part="actions">
+                    <slot name="actions"></slot>
+                </div>
+                
+                <button class="header-toggle" part="toggle" aria-label="Menu">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                </button>
+            </div>
+        `;
+    }
+    
+    protected getStyles(): string {
+        const isFixed = this.getBoolAttr('fixed');
+        const isTransparent = this.getBoolAttr('transparent');
+        const hasShadow = this.getBoolAttr('shadow');
+        
+        return `
             :host {
-                position: fixed;
-                width: 100%;
-                top: 0;
-                left: 0;
-                box-sizing: border-box;
-                display: flex;
-                align-items: center;
-                padding: 10px 20px;
-                background-color: var(--surface-color, #ffffff);
-                border-bottom: 1px solid var(--border-color, #e5e7eb);
-                z-index: 1000;
-                user-select: none;
+                display: block;
+                ${isFixed ? `
+                    position: fixed;
+                    top: 0;
+                    left: 0;
+                    right: 0;
+                    z-index: 1000;
+                ` : ''}
+                background: ${isTransparent ? 'transparent' : 'var(--aits-header-bg, white)'};
+                ${hasShadow ? 'box-shadow: 0 2px 4px rgba(0,0,0,0.1);' : ''}
+                border-bottom: 1px solid var(--aits-border-color, #e5e7eb);
             }
             
-            /* ::slotted() 대신 섀도 DOM 내부의 실제 태그를 직접 스타일링 합니다. */
-            a {
+            .header-container {
                 display: flex;
                 align-items: center;
-                text-decoration: none;
-                color: inherit; /* 링크 색상을 부모 요소와 동일하게 */
-            }
-
-            h1 {
-                margin: 0;
-                padding-left: 5px;
-                font-size: 1.5rem;
-                line-height: 2rem;
-                font-weight: 700;
-                color: var(--primary-900, #1e3a8a);
-            }
-
-            nav {
-                margin-left: auto;
+                justify-content: space-between;
+                padding: 1rem 2rem;
+                max-width: var(--aits-max-width, 1200px);
+                margin: 0 auto;
             }
             
-            nav ul {
+            .header-brand {
                 display: flex;
-                list-style: none;
-                margin: 0;
-                padding: 0;
+                align-items: center;
+                gap: 1rem;
+                font-size: 1.25rem;
+                font-weight: 600;
+            }
+            
+            .header-nav {
+                flex: 1;
+                display: flex;
+                justify-content: center;
+                gap: 2rem;
+            }
+            
+            .header-actions {
+                display: flex;
+                align-items: center;
                 gap: 1rem;
             }
+            
+            .header-toggle {
+                display: none;
+                flex-direction: column;
+                justify-content: space-between;
+                width: 24px;
+                height: 18px;
+                background: transparent;
+                border: none;
+                cursor: pointer;
+                padding: 0;
+            }
+            
+            .header-toggle span {
+                display: block;
+                width: 100%;
+                height: 2px;
+                background: currentColor;
+                transition: all 0.3s ease;
+            }
+            
+            @media (max-width: 768px) {
+                .header-nav,
+                .header-actions {
+                    display: none;
+                }
+                
+                .header-toggle {
+                    display: flex;
+                }
+                
+                :host([menu-open]) .header-nav,
+                :host([menu-open]) .header-actions {
+                    display: flex;
+                    position: absolute;
+                    top: 100%;
+                    left: 0;
+                    right: 0;
+                    flex-direction: column;
+                    background: var(--aits-header-bg, white);
+                    padding: 1rem 2rem;
+                    border-bottom: 1px solid var(--aits-border-color, #e5e7eb);
+                }
+            }
         `;
-        
-        // 3. 렌더링된 콘텐츠의 맨 앞에 스타일 요소를 추가합니다.
-        this.shadow.prepend(style);
+    }
+    
+    protected afterRender(): void {
+        const toggle = this.$('.header-toggle') as HTMLButtonElement;
+        if (toggle) {
+            toggle.addEventListener('click', () => {
+                this.toggleAttribute('menu-open');
+                this.emit('menu-toggle', { 
+                    open: this.hasAttribute('menu-open') 
+                });
+            });
+        }
     }
 }
