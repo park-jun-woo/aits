@@ -6,7 +6,7 @@ import { AitsElement } from './AitsElement';
  * <header is="aits-header">: 페이지의 헤더 영역을 정의하는 컨테이너 컴포넌트.
  * 내부에 슬롯을 두어 자식 요소들을 그대로 표시합니다.
  */
-class AitsHeader extends AitsElement {
+export class AitsHeader extends AitsElement {
     constructor() {
         super();
     }
@@ -74,6 +74,3 @@ class AitsHeader extends AitsElement {
         this.shadow.prepend(style);
     }
 }
-
-// 'aits-header'라는 이름으로 커스텀 엘리먼트를 등록합니다.
-customElements.define('aits-header', AitsHeader, { extends: 'header' });

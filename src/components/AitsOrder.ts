@@ -2,7 +2,7 @@ import { AitsElement } from './AitsElement';
 /**
  * <aits-order>: 목록 정렬을 위한 컴포넌트.
  */
-class AitsOrder extends AitsElement {
+export class AitsOrder extends AitsElement {
     connectedCallback() {
         super.connectedCallback();
         this.addEventListener('click', () => {
@@ -18,4 +18,3 @@ class AitsOrder extends AitsElement {
         this.shadow.innerHTML = `<slot></slot>`;
     }
 }
-customElements.define('aits-order', AitsOrder);

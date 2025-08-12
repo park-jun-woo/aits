@@ -6,17 +6,17 @@
  * - 프레임워크의 전체 생명주기, 라우팅, 컨트롤러 관리를 담당합니다.
  * - AI가 애플리케이션의 구조를 쉽게 파악하고 제어할 수 있도록,
  * 명확하고 예측 가능한 패턴을 제공하는 것을 목표로 합니다.
- * @author Aits Framework AI (based on MistTS by parkjunwoo)
- * @version 0.1.0
+ * @author Aits Framework AI
+ * @version 0.2.0
  */
 
-import Navigo from 'navigo'; // 강력하고 유연한 클라이언트 사이드 라우터
-import { Loader, LoadOptions } from './Loader'; // 모든 리소스 로딩을 담당
-import { Context } from './Context'; // 컨트롤러에게 주입될 실행 컨텍스트
-import { Controller } from './Controller'; // 모든 컨트롤러의 기반 클래스
-import { Model } from './Model'; // 모든 모델의 기반 클래스
-import { Renderer } from './Renderer';
-import { IApiAdapter, DefaultApiAdapter } from './ApiAdapter'; // ApiAdapter import
+import Navigo from 'navigo';
+import { Loader, LoadOptions } from './Loader';
+import { Context } from './Context';
+import { Controller } from './Controller';
+import { Model } from './Model';
+import { Renderer, LayoutConfig, TransitionOptions, Transition } from './Renderer';
+import { IApiAdapter, DefaultApiAdapter } from './ApiAdapter';
 
 // 라우팅 규칙을 정의하기 위한 타입
 export interface RouteDefinition {
@@ -25,195 +25,298 @@ export interface RouteDefinition {
     methodName: string;
 }
 
+// 모델 등록 옵션
+export interface ModelRegistration {
+    instance?: Model;
+    path?: string;
+    loaded?: boolean;
+}
+
 export class Aits {
     private navigator: Navigo;
     private loader: Loader;
-    public apiAdapter: IApiAdapter; // API 어댑터를 public으로 설정
+    private renderer: Renderer;
+    public apiAdapter: IApiAdapter;
+    
+    // 컨트롤러 관리
     private controllers: Map<string, Promise<Controller>>;
-    private models: Map<string, Model>;
-    private modelPaths: Map<string, string>;
-    private renderer:Renderer;
     private activeController: Controller | null;
+    
+    // 모델 관리 - 통합된 단일 Map으로 관리
+    private models: Map<string, ModelRegistration>;
+    
+    // 프레임워크 상태
     private isRunning: boolean;
+    private routeDefinitions: RouteDefinition[];
 
     public constructor() {
         this.navigator = new Navigo('/');
         this.loader = new Loader(this);
-        this.apiAdapter = new DefaultApiAdapter(); // 기본 어댑터 설정
+        this.renderer = new Renderer(this);
+        this.apiAdapter = new DefaultApiAdapter();
+        
         this.controllers = new Map();
         this.models = new Map();
-        this.modelPaths = new Map();
-        this.renderer = new Renderer(this);
         this.activeController = null;
         this.isRunning = false;
+        this.routeDefinitions = [];
 
         // 404 핸들러 정의
         this.navigator.notFound(() => {
-            console.error("404 Not Found: The requested route does not exist.");
-            // 여기에 404 페이지를 보여주는 로직을 추가할 수 있습니다.
-            // 예: this.navigate('/404');
+            this.handle404();
+        });
+        
+        // 브라우저 뒤로가기/앞으로가기 처리
+        this.navigator.hooks({
+            before: (done) => {
+                // 라우트 변경 전 처리
+                done();
+            },
+            after: () => {
+                // 라우트 변경 후 처리
+                this.updatePageLinks();
+            }
         });
     }
 
     /**
+     * 404 에러 처리
+     */
+    private handle404(): void {
+        console.error('[Aits] 404 Not Found: The requested route does not exist.');
+        
+        // 404 페이지 렌더링 시도
+        if (this.routeDefinitions.some(r => r.path === '/404')) {
+            this.navigate('/404');
+        } else {
+            // 기본 404 메시지 표시
+            const mainContainer = document.querySelector('[data-aits-main]');
+            if (mainContainer) {
+                mainContainer.innerHTML = `
+                    <div class="aits-404">
+                        <h1>404</h1>
+                        <p>Page not found</p>
+                        <a href="/" data-navigo>Go Home</a>
+                    </div>
+                `;
+                this.updatePageLinks();
+            }
+        }
+    }
+
+    /**
      * 프레임워크에서 사용할 API 어댑터를 설정합니다.
-     * 이 메소드는 run()을 호출하기 전에 실행되어야 합니다.
      * @param adapter - 사용할 API 어댑터 인스턴스
      */
     public setApiAdapter(adapter: IApiAdapter): void {
+        if (this.isRunning) {
+            console.warn('[Aits] API adapter should be set before calling run()');
+        }
         this.apiAdapter = adapter;
     }
 
     /**
-     * (기존) 모델 인스턴스를 직접 등록하는 메소드 (정적 로딩)
+     * 모델을 등록합니다. (인스턴스 또는 경로)
+     * @param name - 모델 식별 이름
+     * @param modelOrPath - 모델 인스턴스 또는 파일 경로
      */
-    public model(name: string, modelInstance: any): void {
-        if (this.modelPaths.has(name)) {
-            console.warn(`[Aits] Model '${name}' was already registered by path. The instance registration will be ignored.`);
+    public model(name: string, modelOrPath: Model | string): void {
+        const existing = this.models.get(name);
+        
+        if (existing?.loaded) {
+            console.warn(`[Aits] Model '${name}' is already loaded. Skipping registration.`);
             return;
         }
-        this.models.set(name, modelInstance);
+        
+        if (typeof modelOrPath === 'string') {
+            // 경로로 등록
+            this.models.set(name, { path: modelOrPath });
+        } else {
+            // 인스턴스로 등록
+            this.models.set(name, { instance: modelOrPath, loaded: true });
+        }
     }
 
     /**
-     * (신규) 모델 이름과 파일 경로를 등록하는 메소드 (동적 로딩)
-     * @param name - 모델을 식별할 이름 (e.g., 'StatisticsModel')
-     * @param path - 컨트롤러에서 사용하는 것과 동일한 형식의 경로 (e.g., './model/StatisticsModel')
+     * 등록된 모델 인스턴스를 가져옵니다.
+     * @param name - 모델 이름
+     * @returns 모델 인스턴스
      */
-    public modelByPath(name: string, path: string): void {
-        if (this.models.has(name)) {
-            console.warn(`[Aits] Model '${name}' was already registered as an instance. The path registration will be ignored.`);
-            return;
+    public async getModel<T extends Model>(name: string): Promise<T> {
+        const registration = this.models.get(name);
+        
+        if (!registration) {
+            throw new Error(`[Aits] Model '${name}' is not registered.`);
         }
-        this.modelPaths.set(name, path);
-    }
-
-    /**
-     * (수정) 등록된 모델 인스턴스를 가져옵니다.
-     * 경로로 등록된 경우, 동적으로 로드하고 결과를 캐싱합니다.
-     */
-    public async getModel<T>(name: string): Promise<T> {
-        // 1. 이미 인스턴스가 캐시되어 있으면 즉시 반환
-        if (this.models.has(name)) {
-            return this.models.get(name) as T;
+        
+        // 이미 로드된 인스턴스가 있으면 반환
+        if (registration.loaded && registration.instance) {
+            return registration.instance as T;
         }
-
-        // 2. 경로가 등록되어 있다면, 동적으로 import하여 인스턴스화
-        if (this.modelPaths.has(name)) {
-            const modelPath = this.modelPaths.get(name)!;
+        
+        // 경로가 있으면 동적 로드
+        if (registration.path) {
             try {
-                // Vite는 확장자 없는 동적 import를 잘 처리해 줍니다.
-                const module = await import(/* @vite-ignore */ modelPath);
+                const module = await import(/* @vite-ignore */ registration.path);
                 const ModelClass = module.default;
                 
                 if (typeof ModelClass !== 'function') {
-                    throw new Error(`Module at '${modelPath}' does not have a default export that is a class.`);
+                    throw new Error(`Module at '${registration.path}' does not export a valid Model class.`);
                 }
-
+                
                 const modelInstance = new ModelClass(this);
                 
-                // 3. 한 번 로드된 모델은 다음을 위해 인스턴스로 캐시합니다.
-                this.models.set(name, modelInstance);
-
+                // 캐시에 저장
+                registration.instance = modelInstance;
+                registration.loaded = true;
+                
                 return modelInstance as T;
             } catch (err) {
-                console.error(`[Aits] Failed to load model '${name}' from path '${modelPath}':`, err);
+                console.error(`[Aits] Failed to load model '${name}' from path '${registration.path}':`, err);
                 throw err;
             }
         }
-
-        throw new Error(`[Aits] Model '${name}' is not registered.`);
+        
+        throw new Error(`[Aits] Model '${name}' has no valid instance or path.`);
     }
 
     /**
-     * 중앙 라우팅 설정 파일을 동적으로 불러와 라우팅 규칙을 설정합니다.
-     * AI는 이 메소드를 호출하여 앱의 전체 URL 구조를 정의합니다.
-     * @param path - 라우팅 설정 파일의 경로 (e.g., '/app/routes.js')
+     * 모든 등록된 모델을 프리로드합니다.
+     */
+    public async preloadModels(): Promise<void> {
+        const loadPromises: Promise<any>[] = [];
+        
+        for (const [name, registration] of this.models.entries()) {
+            if (!registration.loaded && registration.path) {
+                loadPromises.push(this.getModel(name));
+            }
+        }
+        
+        if (loadPromises.length > 0) {
+            await Promise.all(loadPromises);
+            console.log(`[Aits] Preloaded ${loadPromises.length} models`);
+        }
+    }
+
+    /**
+     * 라우팅 설정 파일을 동적으로 불러와 라우팅 규칙을 설정합니다.
+     * @param path - 라우팅 설정 파일의 경로
      */
     public async routes(path: string): Promise<void> {
         try {
-            const module = await import(path);
-            const routeDefinitions: RouteDefinition[] = module.default;
+            const module = await import(/* @vite-ignore */ path);
+            const definitions: RouteDefinition[] = module.default;
 
-            if (Array.isArray(routeDefinitions)) {
-                routeDefinitions.forEach(route => {
-                    this.addRoute(route.path, route.controllerPath, route.methodName);
-                });
+            if (!Array.isArray(definitions)) {
+                throw new Error('Routes file must export an array of RouteDefinition');
             }
-            // 프레임워크가 이미 실행 중이라면, 새로운 경로를 즉시 적용
+
+            // 기존 라우트 정의 저장
+            this.routeDefinitions = definitions;
+            
+            // 각 라우트 등록
+            definitions.forEach(route => {
+                this.addRoute(route.path, route.controllerPath, route.methodName);
+            });
+            
+            // 프레임워크가 이미 실행 중이면 현재 URL 재평가
             if (this.isRunning) {
                 this.navigator.resolve();
             }
+            
+            console.log(`[Aits] Loaded ${definitions.length} routes from ${path}`);
         } catch (err) {
             console.error(`[Aits] Error loading routes from ${path}:`, err);
+            throw err;
         }
     }
 
     /**
      * 단일 라우팅 규칙을 추가합니다.
-     * @param path - URL 경로 (e.g., '/articles/:id')
-     * @param controllerPath - 해당 경로를 처리할 컨트롤러 파일 경로
-     * @param methodName - 컨트롤러에서 실행될 메소드 이름
+     * @param path - URL 경로
+     * @param controllerPath - 컨트롤러 파일 경로
+     * @param methodName - 실행할 메소드 이름
      */
     public addRoute(path: string, controllerPath: string, methodName: string): void {
         this.navigator.on(path, async (match) => {
             try {
-                // 1. 이전 컨트롤러 비활성화 (onLeave)
-                if (this.activeController && typeof this.activeController.onLeave === 'function') {
-                    await this.activeController.onLeave();
-                }
+                // 이전 컨트롤러 정리
+                await this.cleanupActiveController();
 
-                // 2. 새로운 컨트롤러 로드 및 초기화
-                let controllerPromise = this.controllers.get(controllerPath);
-                if (!controllerPromise) {
-                    controllerPromise = this.loadController(controllerPath);
-                    this.controllers.set(controllerPath, controllerPromise);
-                }
-                const controller = await controllerPromise;
-
-                // 3. Context 생성 및 생명주기 메소드 실행
+                // 새 컨트롤러 로드
+                const controller = await this.getController(controllerPath);
+                
+                // Context 생성
                 const context = new Context(this, match);
+                
+                // 활성 컨트롤러 설정
                 this.activeController = controller;
 
-                // 3-1. (생명주기 3) 페이지 진입 시마다 onEnter 실행
+                // 생명주기 실행
                 if (typeof controller.onEnter === 'function') {
                     await controller.onEnter(context);
                 }
                 
-                // 3-2. (생명주기 4) 실제 라우트 메소드 실행
-                if (typeof controller[methodName] === 'function') {
-                    await controller[methodName](context);
+                // 라우트 메소드 실행
+                const method = (controller as any)[methodName];
+                if (typeof method === 'function') {
+                    await method.call(controller, context);
                 } else {
-                    console.error(`[Aits] Method '${methodName}' not found in controller '${controllerPath}'.`);
+                    throw new Error(`Method '${methodName}' not found in controller`);
                 }
             } catch (err) {
                 console.error(`[Aits] Error processing route '${path}':`, err);
+                this.handle404();
             }
         });
     }
 
     /**
-     * 컨트롤러 파일을 동적으로 로드하고 인스턴스를 생성합니다.
-     * 컨트롤러의 `required` 의존성을 먼저 해결한 후 `onLoad`을 호출합니다.
+     * 컨트롤러를 가져옵니다. (캐시 사용)
+     * @param controllerPath - 컨트롤러 파일 경로
+     */
+    private async getController(controllerPath: string): Promise<Controller> {
+        // 캐시 확인
+        let controllerPromise = this.controllers.get(controllerPath);
+        
+        if (!controllerPromise) {
+            controllerPromise = this.loadController(controllerPath);
+            this.controllers.set(controllerPath, controllerPromise);
+        }
+        
+        return controllerPromise;
+    }
+
+    /**
+     * 컨트롤러를 로드하고 초기화합니다.
      * @param controllerPath - 컨트롤러 파일 경로
      */
     private async loadController(controllerPath: string): Promise<Controller> {
         try {
-            const module = await import(controllerPath);
+            const module = await import(/* @vite-ignore */ controllerPath);
             const ControllerClass = module.default;
-            const controllerInstance = new ControllerClass(this);
+            
+            if (typeof ControllerClass !== 'function') {
+                throw new Error('Controller module must export a class as default');
+            }
+            
+            const controller = new ControllerClass(this);
+            const context = new Context(this);
 
-            // (생명주기 1) required - 필수 리소스 선언 및 로드
-            if (typeof controllerInstance.required === 'function') {
-                const requiredResources = controllerInstance.required(new Context(this));
-                await Promise.all(requiredResources);
+            // 생명주기 1: required - 필수 리소스 로드
+            if (typeof controller.required === 'function') {
+                const resources = controller.required(context);
+                if (Array.isArray(resources)) {
+                    await Promise.all(resources);
+                }
             }
 
-            // (생명주기 2) onLoad - 컨트롤러 최초 로드 시 1회 실행
-            if (typeof controllerInstance.onLoad === 'function') {
-                await controllerInstance.onLoad(new Context(this));
+            // 생명주기 2: onLoad - 최초 1회 실행
+            if (typeof controller.onLoad === 'function') {
+                await controller.onLoad(context);
             }
-            return controllerInstance;
+            
+            return controller;
         } catch (err) {
             console.error(`[Aits] Failed to load controller: ${controllerPath}`, err);
             this.controllers.delete(controllerPath);
@@ -222,44 +325,156 @@ export class Aits {
     }
 
     /**
-     * Aits 프레임워크를 시작합니다.
+     * 활성 컨트롤러를 정리합니다.
+     */
+    private async cleanupActiveController(): Promise<void> {
+        if (this.activeController && typeof this.activeController.onLeave === 'function') {
+            try {
+                await this.activeController.onLeave();
+            } catch (err) {
+                console.error('[Aits] Error in controller.onLeave():', err);
+            }
+        }
+        this.activeController = null;
+    }
+
+    /**
+     * 프레임워크를 시작합니다.
      */
     public run(): void {
-        if (this.isRunning) return;
+        if (this.isRunning) {
+            console.warn('[Aits] Framework is already running');
+            return;
+        }
+        
         this.isRunning = true;
-        this.navigator.resolve(); // 현재 URL에 맞는 라우트 실행
+        this.navigator.resolve();
         document.body.classList.add('aits-ready');
-        console.log('[Aits] Framework is running.');
+        
+        // 페이지 링크 초기화
+        this.updatePageLinks();
+        
+        console.log('[Aits] Framework is running');
     }
 
     /**
-     * 페이지 내의 `data-navigo` 속성을 가진 링크들을 갱신합니다.
+     * 프레임워크를 중지합니다.
+     */
+    public async stop(): Promise<void> {
+        if (!this.isRunning) return;
+        
+        // 활성 컨트롤러 정리
+        await this.cleanupActiveController();
+        
+        // 네비게이터 정리
+        this.navigator.destroy();
+        
+        // 로더 정리
+        this.loader.destroy();
+        
+        // 렌더러 정리
+        this.renderer.clearLayout();
+        
+        this.isRunning = false;
+        document.body.classList.remove('aits-ready');
+        
+        console.log('[Aits] Framework stopped');
+    }
+
+    /**
+     * 페이지 내의 data-navigo 링크들을 갱신합니다.
      */
     public updatePageLinks(): void {
-        this.navigator.updatePageLinks();
+        if (this.navigator) {
+            this.navigator.updatePageLinks();
+        }
     }
 
     /**
-     * 프로그래매틱하게 페이지를 이동시킵니다.
+     * 프로그래매틱 페이지 이동
      * @param url - 이동할 URL
      */
     public navigate(url: string): void {
+        if (!this.navigator) {
+            console.error('[Aits] Navigator not initialized');
+            return;
+        }
         this.navigator.navigate(url);
     }
 
-    public html(src: string, options: LoadOptions = {}) {
+    /**
+     * 현재 경로 정보를 반환합니다.
+     */
+    public getCurrentRoute(): string {
+        return this.navigator.getCurrentLocation().url;
+    }
+
+    /**
+     * 뒤로 가기
+     */
+    public back(): void {
+        window.history.back();
+    }
+
+    /**
+     * 앞으로 가기
+     */
+    public forward(): void {
+        window.history.forward();
+    }
+
+    // === Loader 프록시 메서드 ===
+    
+    public html(src: string, options?: LoadOptions) {
         return this.loader.html(src, options);
     }
     
-    public json(src: string) {
-        return this.loader.json(src);
+    public json<T = any>(src: string, options?: LoadOptions) {
+        return this.loader.json<T>(src, options);
     }
 
-    public script(src: string) {
-        return this.loader.script(src);
+    public script(src: string, options?: LoadOptions) {
+        return this.loader.script(src, options);
     }
 
-    public style(src: string) {
-        return this.loader.style(src);
+    public style(src: string, options?: LoadOptions) {
+        return this.loader.style(src, options);
+    }
+
+    // === Renderer 프록시 메서드 ===
+    
+    public render(html: string): HTMLElement {
+        return this.renderer.render(html);
+    }
+    
+    public async renderLayout(
+        config: LayoutConfig,
+        context: Context,
+        transition?: Transition,
+        options?: TransitionOptions
+    ): Promise<void> {
+        return this.renderer.renderLayout(config, context, transition, options);
+    }
+    
+    public activateComponentsIn(container: HTMLElement): void {
+        this.renderer.activateComponentsIn(container);
+    }
+
+    // === Getter 메서드 ===
+    
+    public get isReady(): boolean {
+        return this.isRunning;
+    }
+    
+    public get currentController(): Controller | null {
+        return this.activeController;
+    }
+    
+    public getRenderer(): Renderer {
+        return this.renderer;
+    }
+    
+    public getLoader(): Loader {
+        return this.loader;
     }
 }

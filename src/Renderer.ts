@@ -5,15 +5,26 @@
  * @description
  * - HTML 텍스트를 DOM으로 변환하고, 레이아웃을 구성하며, 전환 효과를 실행합니다.
  * - Web Component 인스턴스를 관리하고, 상태 변경에 따른 자동 재렌더링을 처리합니다.
- * - Scenario.ts와 협력하여 시각적 연출을 담당하지만, 비즈니스 로직에는 관여하지 않습니다.
+ * - customElements.define 대신 is 속성 기반 컴포넌트 활성화를 직접 처리합니다.
  * @author Aits Framework AI
- * @version 0.2.0
+ * @version 0.3.0
  */
 
 import type { Aits } from './Aits';
 import type { Context } from './Context';
 import type { LoadingProgress } from './Loader';
-import { AitsElement } from './components/AitsElement';
+
+// 컴포넌트 import
+import { AitsList } from './components/AitsList';
+import { AitsArticle } from './components/AitsArticle';
+import { AitsForm } from './components/AitsForm';
+import { AitsHeader } from './components/AitsHeader';
+import { AitsFooter } from './components/AitsFooter';
+import { AitsPage } from './components/AitsPage';
+import { AitsNav } from './components/AitsNav';
+import { AitsMore } from './components/AitsMore';
+import { AitsOrder } from './components/AitsOrder';
+import { AitsSearch } from './components/AitsSearch';
 
 // 레이아웃 구성을 정의하는 인터페이스
 export interface LayoutConfig {
@@ -226,12 +237,11 @@ export class SlideTransition extends Transition {
 }
 
 // 컴포넌트 생성자 타입
-type ComponentConstructor = new (...args: any[]) => AitsElement;
+type ComponentConstructor = new () => HTMLElement;
 
 // 렌더링된 뷰 정보
 interface RenderedView {
     element: HTMLElement;
-    components: WeakMap<HTMLElement, AitsElement>;
     controller?: string;
     template: string;
 }
@@ -250,6 +260,9 @@ export class Renderer {
     
     // 컴포넌트 레지스트리 (is 값 -> 클래스 매핑)
     private componentRegistry: Map<string, ComponentConstructor>;
+    
+    // 활성화된 컴포넌트 추적
+    private activeComponents: WeakMap<HTMLElement, HTMLElement>;
     
     // 현재 실행 중인 전환 효과
     private activeTransition: Transition | null = null;
@@ -270,6 +283,7 @@ export class Renderer {
     public constructor(aitsInstance: Aits) {
         this.aits = aitsInstance;
         this.componentRegistry = new Map();
+        this.activeComponents = new WeakMap();
         this.stateBindings = new Map();
         
         // 레이아웃 컨테이너 초기화
@@ -280,6 +294,24 @@ export class Renderer {
     }
     
     /**
+     * 기본 컴포넌트를 등록합니다.
+     * customElements.define 대신 내부 레지스트리에 등록
+     */
+    private _registerDefaultComponents(): void {
+        // 각 컴포넌트 클래스를 is 값과 매핑
+        this.componentRegistry.set('aits-list', AitsList as any);
+        this.componentRegistry.set('aits-article', AitsArticle as any);
+        this.componentRegistry.set('aits-form', AitsForm as any);
+        this.componentRegistry.set('aits-header', AitsHeader as any);
+        this.componentRegistry.set('aits-footer', AitsFooter as any);
+        this.componentRegistry.set('aits-page', AitsPage as any);
+        this.componentRegistry.set('aits-nav', AitsNav as any);
+        this.componentRegistry.set('aits-more', AitsMore as any);
+        this.componentRegistry.set('aits-order', AitsOrder as any);
+        this.componentRegistry.set('aits-search', AitsSearch as any);
+    }
+    
+    /**
      * 컴포넌트 클래스를 등록합니다.
      */
     public register(isValue: string, componentClass: ComponentConstructor): void {
@@ -287,15 +319,14 @@ export class Renderer {
     }
     
     /**
-     * HTML 텍스트를 DOM으로 변환합니다.
-     * Web Component를 활성화하지만 DOM에 추가하지는 않습니다.
+     * HTML 텍스트를 DOM으로 변환하고 is 속성이 있는 요소를 컴포넌트로 활성화합니다.
      */
     public render(html: string): HTMLElement {
         const template = document.createElement('template');
         template.innerHTML = html.trim();
         const fragment = template.content;
         
-        // Web Component 활성화
+        // is 속성을 가진 요소들을 컴포넌트로 활성화
         this._activateComponents(fragment);
         
         // 첫 번째 요소 반환 (또는 wrapper div 생성)
@@ -306,6 +337,108 @@ export class Renderer {
             wrapper.appendChild(fragment);
             return wrapper;
         }
+    }
+    
+    /**
+     * Fragment 내의 is 속성을 가진 요소들을 컴포넌트로 활성화합니다.
+     * customElements.define을 사용하지 않고 직접 프로토타입을 교체합니다.
+     */
+    private _activateComponents(fragment: DocumentFragment): void {
+        // is 속성을 가진 모든 요소 찾기
+        const elementsWithIs = fragment.querySelectorAll('[is]');
+        
+        elementsWithIs.forEach(element => {
+            const htmlElement = element as HTMLElement;
+            const isValue = htmlElement.getAttribute('is');
+            
+            if (isValue && this.componentRegistry.has(isValue)) {
+                const ComponentClass = this.componentRegistry.get(isValue)!;
+                
+                // 컴포넌트 인스턴스 생성
+                const componentInstance = new ComponentClass();
+                
+                // 기존 요소의 모든 속성을 컴포넌트 인스턴스로 복사
+                Array.from(htmlElement.attributes).forEach(attr => {
+                    componentInstance.setAttribute(attr.name, attr.value);
+                });
+                
+                // 기존 요소의 모든 자식 노드를 컴포넌트 인스턴스로 이동
+                while (htmlElement.firstChild) {
+                    componentInstance.appendChild(htmlElement.firstChild);
+                }
+                
+                // DOM에서 기존 요소를 컴포넌트 인스턴스로 교체
+                htmlElement.parentNode?.replaceChild(componentInstance, htmlElement);
+                
+                // 활성화된 컴포넌트 추적
+                this.activeComponents.set(componentInstance, componentInstance);
+            }
+        });
+    }
+    
+    /**
+     * 특정 요소와 그 하위 요소들의 is 속성을 활성화합니다.
+     * DOM에 이미 추가된 요소들을 대상으로 합니다.
+     */
+    public activateComponentsIn(container: HTMLElement): void {
+        // 컨테이너 자체가 is 속성을 가지고 있는지 확인
+        if (container.hasAttribute('is')) {
+            const isValue = container.getAttribute('is');
+            if (isValue && this.componentRegistry.has(isValue)) {
+                const ComponentClass = this.componentRegistry.get(isValue)!;
+                const componentInstance = new ComponentClass();
+                
+                // 속성 복사
+                Array.from(container.attributes).forEach(attr => {
+                    componentInstance.setAttribute(attr.name, attr.value);
+                });
+                
+                // 자식 노드 이동
+                while (container.firstChild) {
+                    componentInstance.appendChild(container.firstChild);
+                }
+                
+                // 교체
+                container.parentNode?.replaceChild(componentInstance, container);
+                this.activeComponents.set(componentInstance, componentInstance);
+                
+                // 교체된 요소를 새로운 컨테이너로 설정
+                container = componentInstance;
+            }
+        }
+        
+        // 하위 요소들 처리
+        const elementsWithIs = container.querySelectorAll('[is]');
+        elementsWithIs.forEach(element => {
+            const htmlElement = element as HTMLElement;
+            const isValue = htmlElement.getAttribute('is');
+            
+            if (isValue && this.componentRegistry.has(isValue)) {
+                const ComponentClass = this.componentRegistry.get(isValue)!;
+                const componentInstance = new ComponentClass();
+                
+                // 속성 복사
+                Array.from(htmlElement.attributes).forEach(attr => {
+                    componentInstance.setAttribute(attr.name, attr.value);
+                });
+                
+                // 자식 노드 이동
+                while (htmlElement.firstChild) {
+                    componentInstance.appendChild(htmlElement.firstChild);
+                }
+                
+                // 교체
+                htmlElement.parentNode?.replaceChild(componentInstance, htmlElement);
+                this.activeComponents.set(componentInstance, componentInstance);
+            }
+        });
+    }
+    
+    /**
+     * 컴포넌트가 활성화되었는지 확인합니다.
+     */
+    public isComponentActivated(element: HTMLElement): boolean {
+        return this.activeComponents.has(element);
     }
     
     /**
@@ -423,15 +556,13 @@ export class Renderer {
     /**
      * 특정 셀렉터로 관리 중인 컴포넌트를 찾습니다.
      */
-    public queryComponent<T extends AitsElement>(selector: string): T | undefined {
+    public queryComponent<T extends HTMLElement>(selector: string): T | undefined {
         const element = document.querySelector(selector) as HTMLElement | null;
         if (!element) return undefined;
         
-        // 현재 레이아웃의 모든 뷰에서 컴포넌트 검색
-        for (const section of Object.values(this.currentLayout)) {
-            if (section && section.components.has(element)) {
-                return section.components.get(element) as T;
-            }
+        // 활성화된 컴포넌트인지 확인
+        if (this.activeComponents.has(element)) {
+            return element as T;
         }
         
         return undefined;
@@ -469,6 +600,17 @@ export class Renderer {
         }
     }
     
+    /**
+     * 모달을 닫습니다.
+     */
+    public closeModal(): void {
+        if (this.containers.modal && this.currentLayout.modal) {
+            this.containers.modal.classList.remove('active');
+            this.currentLayout.modal.element.remove();
+            delete this.currentLayout.modal;
+        }
+    }
+    
     // === Private Helper Methods ===
     
     /**
@@ -496,55 +638,6 @@ export class Renderer {
             root,
             main
         };
-    }
-    
-    /**
-     * 기본 컴포넌트를 등록합니다.
-     */
-    private _registerDefaultComponents(): void {
-        // components 폴더의 컴포넌트들을 자동으로 등록
-        // 실제 구현에서는 import를 통해 등록
-        // this.register('aits-list', AitsList);
-        // this.register('aits-article', AitsArticle);
-        // ...
-    }
-    
-    /**
-     * Fragment 내의 Web Component를 활성화합니다.
-     */
-    private _activateComponents(fragment: DocumentFragment): WeakMap<HTMLElement, AitsElement> {
-        const components = new WeakMap<HTMLElement, AitsElement>();
-        const elements = fragment.querySelectorAll('[is^="aits-"]');
-        
-        elements.forEach(element => {
-            const htmlElement = element as HTMLElement;
-            const isValue = htmlElement.getAttribute('is');
-            
-            if (isValue && this.componentRegistry.has(isValue)) {
-                const ComponentClass = this.componentRegistry.get(isValue)!;
-                const instance = new ComponentClass();
-                
-                // 속성 복사
-                Array.from(htmlElement.attributes).forEach(attr => {
-                    if (attr.name !== 'is') {
-                        instance.setAttribute(attr.name, attr.value);
-                    }
-                });
-                
-                // 자식 노드 이동
-                while (htmlElement.firstChild) {
-                    instance.appendChild(htmlElement.firstChild);
-                }
-                
-                // DOM에서 교체
-                htmlElement.parentNode?.replaceChild(instance, htmlElement);
-                
-                // 컴포넌트 맵에 저장
-                components.set(instance, instance);
-            }
-        });
-        
-        return components;
     }
     
     /**
@@ -591,7 +684,6 @@ export class Renderer {
         // 레이아웃 정보 저장
         this.currentLayout[section] = {
             element,
-            components: new WeakMap(),
             template: html
         };
     }
@@ -639,7 +731,6 @@ export class Renderer {
         // 레이아웃 정보 업데이트
         this.currentLayout.main = {
             element: container,
-            components: new WeakMap(),
             template: viewPaths.join(',')
         };
     }
@@ -678,7 +769,6 @@ export class Renderer {
         // 레이아웃 정보 저장
         this.currentLayout.modal = {
             element,
-            components: new WeakMap(),
             template: html
         };
         
@@ -688,17 +778,6 @@ export class Renderer {
                 this.closeModal();
             }
         }, { once: true });
-    }
-    
-    /**
-     * 모달을 닫습니다.
-     */
-    public closeModal(): void {
-        if (this.containers.modal && this.currentLayout.modal) {
-            this.containers.modal.classList.remove('active');
-            this.currentLayout.modal.element.remove();
-            delete this.currentLayout.modal;
-        }
     }
     
     /**

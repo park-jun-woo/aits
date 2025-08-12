@@ -8,125 +8,440 @@
  * 페이지 제어에 필요한 모든 것을 제공합니다.
  * - AI가 가장 쉽게 상태를 관리하고 UI를 업데이트할 수 있도록
  * '반응형 상태(Reactive State)' 기능을 핵심으로 합니다.
+ * @author Aits Framework AI
+ * @version 0.2.0
  */
+
 import type { Aits } from './Aits';
+import type { Renderer } from './Renderer';
+import type { LoadOptions } from './Loader';
 
 // Navigo의 match 객체에서 필요한 정보만 추출하여 타입을 정의
 export interface RouteInfo {
-    url: string;            // 매칭된 전체 URL (e.g., '/articles/123?sort=desc')
-    path: string;           // 파라미터가 적용된 경로 (e.g., '/articles/123')
-    route: string;          // 등록된 원본 경로 (e.g., '/articles/:id')
-    params: Record<string, string> | null; // URL 파라미터 (e.g., { id: '123' })
-    query: Record<string, string>;         // 쿼리 스트링 (e.g., { sort: 'desc' })
+    url: string;                               // 매칭된 전체 URL (e.g., '/articles/123?sort=desc')
+    path: string;                              // 파라미터가 적용된 경로 (e.g., '/articles/123')
+    route: string;                             // 등록된 원본 경로 (e.g., '/articles/:id')
+    params: Record<string, string> | null;     // URL 파라미터 (e.g., { id: '123' })
+    query: Record<string, string>;             // 쿼리 스트링 (e.g., { sort: 'desc' })
 }
+
+// 바인딩 요소 정의
+interface BoundElement {
+    element: HTMLElement;
+    property: string;
+    transform?: (value: any) => any;  // 값 변환 함수 (옵션)
+}
+
+// 상태 옵저버 타입
+type StateObserver = (newValue: any, oldValue: any, key: string) => void;
 
 export class Context {
     public readonly aits: Aits;
     public readonly route: RouteInfo;
-    public state: any; // 반응형 상태 객체
-
-    private stateBindings: Map<string, Array<{element: HTMLElement, property: string}>>;
+    public state: any;  // 반응형 상태 객체
+    
+    private stateBindings: Map<string, BoundElement[]>;
+    private stateObservers: Map<string, Set<StateObserver>>;
+    private stateValues: Map<string, any>;  // 이전 값 추적용
 
     constructor(aitsInstance: Aits, navigoMatch: any = {}) {
         this.aits = aitsInstance;
+        this.stateBindings = new Map();
+        this.stateObservers = new Map();
+        this.stateValues = new Map();
 
-        // Navigo의 match 객체를 AI가 사용하기 쉬운 RouteInfo 형태로 가공
+        // Navigo의 match 객체를 RouteInfo 형태로 가공
+        this.route = this._parseRoute(navigoMatch);
+
+        // 반응형 상태 프록시 생성
+        this.state = this._createReactiveState();
+    }
+
+    /**
+     * Navigo match 객체를 RouteInfo로 변환
+     */
+    private _parseRoute(navigoMatch: any): RouteInfo {
         const urlParams = new URLSearchParams(navigoMatch.queryString || '');
-        this.route = {
+        
+        return {
             url: navigoMatch.url || '',
             path: navigoMatch.route?.path || '',
-            route: navigoMatch.route?.name || '',
+            route: navigoMatch.route?.name || navigoMatch.route?.path || '',
             params: navigoMatch.data || null,
             query: Object.fromEntries(urlParams.entries()),
         };
+    }
 
-        this.stateBindings = new Map();
-
-        // --- 반응형 상태(Reactive State)의 핵심 ---
-        // state 객체를 Proxy로 감싸서, 프로퍼티 변경을 감지합니다.
-        this.state = new Proxy({}, {
+    /**
+     * 반응형 상태 프록시 생성
+     */
+    private _createReactiveState(): any {
+        return new Proxy({}, {
+            get: (target: any, property: string): any => {
+                // 중첩 객체도 반응형으로 만들기
+                const value = target[property];
+                if (value && typeof value === 'object' && !Array.isArray(value)) {
+                    return this._createNestedProxy(value, property);
+                }
+                return value;
+            },
             set: (target: any, property: string, value: any): boolean => {
+                const oldValue = this.stateValues.get(property);
                 target[property] = value;
-                // 상태가 변경되면, 이 상태와 바인딩된 모든 UI를 자동으로 업데이트
-                this.updateBoundElements(property);
+                this.stateValues.set(property, value);
+                
+                // 값이 실제로 변경된 경우에만 업데이트
+                if (oldValue !== value) {
+                    this._notifyStateChange(property, value, oldValue);
+                }
+                
+                return true;
+            },
+            deleteProperty: (target: any, property: string): boolean => {
+                const oldValue = target[property];
+                delete target[property];
+                this.stateValues.delete(property);
+                this._notifyStateChange(property, undefined, oldValue);
                 return true;
             }
         });
     }
 
     /**
-     * 상태(state)의 특정 키(key)와 UI 요소(element)의 속성(property)을 연결합니다.
-     * 예: ctx.bind('article.title', document.getElementById('title'), 'textContent');
-     * 이후 ctx.state.article = { title: '새 제목' }으로 변경하면,
-     * 해당 요소의 textContent가 '새 제목'으로 자동 업데이트됩니다.
-     * @param stateKey - 추적할 상태의 키
-     * @param element - 업데이트할 UI 요소
-     * @param property - 업데이트할 요소의 속성 (e.g., 'textContent', 'value', 'src')
+     * 중첩 객체를 위한 프록시 생성
      */
-    public bind(stateKey: string, element: HTMLElement, property: string): void {
-        if (!this.stateBindings.has(stateKey)) {
-            this.stateBindings.set(stateKey, []);
-        }
-        this.stateBindings.get(stateKey)!.push({ element, property });
+    private _createNestedProxy(obj: any, parentKey: string): any {
+        return new Proxy(obj, {
+            set: (target: any, property: string, value: any): boolean => {
+                target[property] = value;
+                const fullKey = `${parentKey}.${property}`;
+                const oldValue = this.stateValues.get(fullKey);
+                this.stateValues.set(fullKey, value);
+                
+                if (oldValue !== value) {
+                    this._notifyStateChange(fullKey, value, oldValue);
+                    // 부모 키도 업데이트 알림
+                    this._notifyStateChange(parentKey, this.state[parentKey], this.state[parentKey]);
+                }
+                
+                return true;
+            }
+        });
     }
 
     /**
-     * 특정 상태 키와 연결된 모든 UI 요소를 업데이트합니다.
-     * @param propertyKey - 변경된 상태의 키
+     * 상태 변경 알림
      */
-    private updateBoundElements(propertyKey: string): void {
-        const bindings = this.stateBindings.get(propertyKey);
-        if (bindings) {
-            const value = this.state[propertyKey];
-            bindings.forEach(binding => {
+    private _notifyStateChange(key: string, newValue: any, oldValue: any): void {
+        // 바인딩된 요소 업데이트
+        this._updateBoundElements(key, newValue);
+        
+        // 옵저버 호출
+        this._notifyObservers(key, newValue, oldValue);
+    }
+
+    /**
+     * 상태와 UI 요소를 바인딩합니다.
+     * @param stateKey - 상태 키 (중첩 지원: 'user.name')
+     * @param element - 바인딩할 요소
+     * @param property - 업데이트할 속성
+     * @param transform - 값 변환 함수 (옵션)
+     */
+    public bind(
+        stateKey: string, 
+        element: HTMLElement, 
+        property: string,
+        transform?: (value: any) => any
+    ): void {
+        if (!this.stateBindings.has(stateKey)) {
+            this.stateBindings.set(stateKey, []);
+        }
+        
+        this.stateBindings.get(stateKey)!.push({ 
+            element, 
+            property,
+            transform 
+        });
+        
+        // 초기값 설정
+        const currentValue = this._getNestedValue(stateKey);
+        if (currentValue !== undefined) {
+            this._updateElement({ element, property, transform }, currentValue);
+        }
+    }
+
+    /**
+     * 바인딩 해제
+     */
+    public unbind(stateKey: string, element?: HTMLElement): void {
+        if (!element) {
+            // 키에 대한 모든 바인딩 제거
+            this.stateBindings.delete(stateKey);
+        } else {
+            // 특정 요소만 제거
+            const bindings = this.stateBindings.get(stateKey);
+            if (bindings) {
+                const filtered = bindings.filter(b => b.element !== element);
+                if (filtered.length > 0) {
+                    this.stateBindings.set(stateKey, filtered);
+                } else {
+                    this.stateBindings.delete(stateKey);
+                }
+            }
+        }
+    }
+
+    /**
+     * 상태 변경 옵저버 등록
+     */
+    public observe(stateKey: string, callback: StateObserver): () => void {
+        if (!this.stateObservers.has(stateKey)) {
+            this.stateObservers.set(stateKey, new Set());
+        }
+        
+        this.stateObservers.get(stateKey)!.add(callback);
+        
+        // 구독 해제 함수 반환
+        return () => {
+            const observers = this.stateObservers.get(stateKey);
+            if (observers) {
+                observers.delete(callback);
+                if (observers.size === 0) {
+                    this.stateObservers.delete(stateKey);
+                }
+            }
+        };
+    }
+
+    /**
+     * 바인딩된 요소들 업데이트
+     */
+    private _updateBoundElements(key: string, value: any): void {
+        // 정확한 키 매칭
+        const exactBindings = this.stateBindings.get(key);
+        if (exactBindings) {
+            exactBindings.forEach(binding => {
+                this._updateElement(binding, value);
+            });
+        }
+        
+        // 와일드카드 매칭 (부모 키가 변경된 경우 자식들도 업데이트)
+        this.stateBindings.forEach((bindings, bindingKey) => {
+            if (bindingKey.startsWith(key + '.')) {
+                const nestedValue = this._getNestedValue(bindingKey);
+                bindings.forEach(binding => {
+                    this._updateElement(binding, nestedValue);
+                });
+            }
+        });
+    }
+
+    /**
+     * 단일 요소 업데이트
+     */
+    private _updateElement(binding: BoundElement, value: any): void {
+        try {
+            // DOM에서 제거된 요소 체크
+            if (!document.body.contains(binding.element)) {
+                return;
+            }
+            
+            const finalValue = binding.transform ? binding.transform(value) : value;
+            
+            // 특별한 속성 처리
+            if (binding.property === 'class') {
+                binding.element.className = String(finalValue);
+            } else if (binding.property === 'style') {
+                Object.assign(binding.element.style, finalValue);
+            } else if (binding.property === 'dataset') {
+                Object.assign(binding.element.dataset, finalValue);
+            } else {
+                (binding.element as any)[binding.property] = finalValue;
+            }
+        } catch (e) {
+            console.error(`[Context] Error updating element:`, e);
+        }
+    }
+
+    /**
+     * 옵저버들에게 알림
+     */
+    private _notifyObservers(key: string, newValue: any, oldValue: any): void {
+        const observers = this.stateObservers.get(key);
+        if (observers) {
+            observers.forEach(observer => {
                 try {
-                    (binding.element as any)[binding.property] = value;
+                    observer(newValue, oldValue, key);
                 } catch (e) {
-                    console.error(`[Aits] Error updating bound element for state '${propertyKey}':`, e);
+                    console.error(`[Context] Error in state observer:`, e);
                 }
             });
         }
     }
 
     /**
-     * 페이지를 이동합니다.
-     * @param url - 이동할 내부 경로
+     * 중첩된 키로 값 가져오기
+     */
+    private _getNestedValue(key: string): any {
+        const keys = key.split('.');
+        let value = this.state;
+        
+        for (const k of keys) {
+            if (value == null) return undefined;
+            value = value[k];
+        }
+        
+        return value;
+    }
+
+    /**
+     * 상태 일괄 업데이트 (여러 값을 한번에 업데이트)
+     */
+    public setState(updates: Record<string, any>): void {
+        Object.entries(updates).forEach(([key, value]) => {
+            this.state[key] = value;
+        });
+    }
+
+    /**
+     * 상태 초기화
+     */
+    public resetState(): void {
+        // 모든 키에 대해 undefined로 설정하여 옵저버 트리거
+        this.stateValues.forEach((_, key) => {
+            this.state[key] = undefined;
+        });
+        
+        // 프록시 재생성
+        this.state = this._createReactiveState();
+        this.stateValues.clear();
+    }
+
+    /**
+     * 모든 바인딩과 옵저버 정리
+     */
+    public cleanup(): void {
+        this.stateBindings.clear();
+        this.stateObservers.clear();
+        this.stateValues.clear();
+    }
+
+    // === Renderer 접근 ===
+    
+    /**
+     * Renderer 인스턴스 가져오기
+     */
+    public get renderer(): Renderer {
+        return this.aits.getRenderer();
+    }
+
+    // === Navigation 메서드 ===
+    
+    /**
+     * 내부 페이지 이동
      */
     public navigate(url: string): void {
         this.aits.navigate(url);
     }
 
     /**
-     * 외부 URL로 리다이렉트하거나 페이지를 새로고침합니다.
-     * @param url - 이동할 전체 URL
-     * @param replace - History에 남기지 않을지 여부 (기본값: false)
+     * 외부 URL 리다이렉트
      */
-    public redirect(url: string, replace = false): void {
-        replace ? window.location.replace(url) : window.location.assign(url);
+    public redirect(url: string, replace: boolean = false): void {
+        if (replace) {
+            window.location.replace(url);
+        } else {
+            window.location.assign(url);
+        }
     }
 
-    // --- Loader 프록시 메소드 ---
-    public header(src: string, onLoad?: (el: HTMLElement) => void) {
-        return this.aits.header(src, onLoad);
-    }
-    
-    public footer(src: string, onLoad?: (el: HTMLElement) => void) {
-        return this.aits.footer(src, onLoad);
+    /**
+     * 뒤로 가기
+     */
+    public back(): void {
+        this.aits.back();
     }
 
-    public view(src: string, onLoad?: (el: HTMLElement) => void) {
-        return this.aits.view(src, onLoad);
+    /**
+     * 앞으로 가기
+     */
+    public forward(): void {
+        this.aits.forward();
+    }
+
+    /**
+     * 현재 경로 가져오기
+     */
+    public getCurrentRoute(): string {
+        return this.aits.getCurrentRoute();
+    }
+
+    // === Loader 프록시 메서드 ===
+    
+    /**
+     * HTML 로드
+     */
+    public html(src: string, options?: LoadOptions): Promise<string> {
+        return this.aits.html(src, options);
     }
     
-    public json(src: string) {
-        return this.aits.json(src);
+    /**
+     * JSON 로드
+     */
+    public json<T = any>(src: string, options?: LoadOptions): Promise<T> {
+        return this.aits.json<T>(src, options);
     }
     
-    public js(src: string) {
-        return this.aits.js(src);
+    /**
+     * 스크립트 로드
+     */
+    public script(src: string, options?: LoadOptions): Promise<void> {
+        return this.aits.script(src, options);
     }
     
-    public css(src: string) {
-        return this.aits.css(src);
+    /**
+     * 스타일시트 로드
+     */
+    public style(src: string, options?: LoadOptions): Promise<void> {
+        return this.aits.style(src, options);
+    }
+
+    // === 유틸리티 메서드 ===
+    
+    /**
+     * 쿼리 파라미터 가져오기
+     */
+    public getQueryParam(key: string): string | undefined {
+        return this.route.query[key];
+    }
+
+    /**
+     * URL 파라미터 가져오기
+     */
+    public getParam(key: string): string | undefined {
+        return this.route.params?.[key];
+    }
+
+    /**
+     * 쿼리 스트링 생성
+     */
+    public buildQueryString(params: Record<string, any>): string {
+        const searchParams = new URLSearchParams();
+        Object.entries(params).forEach(([key, value]) => {
+            if (value !== undefined && value !== null) {
+                searchParams.append(key, String(value));
+            }
+        });
+        return searchParams.toString();
+    }
+
+    /**
+     * URL 생성 (파라미터 포함)
+     */
+    public buildUrl(path: string, params?: Record<string, any>): string {
+        if (!params) return path;
+        
+        const queryString = this.buildQueryString(params);
+        return queryString ? `${path}?${queryString}` : path;
     }
 }

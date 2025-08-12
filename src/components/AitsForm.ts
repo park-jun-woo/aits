@@ -2,7 +2,7 @@ import { AitsElement } from './AitsElement';
 /**
  * <form is="aits-form">: 데이터 제출을 위한 폼 컨테이너.
  */
-class AitsForm extends AitsElement {
+export class AitsForm extends AitsElement {
     connectedCallback() {
         super.connectedCallback();
         this.shadow.addEventListener('submit', (e) => {
@@ -35,4 +35,3 @@ class AitsForm extends AitsElement {
         this.appendChild(formElement);
     }
 }
-customElements.define('aits-form', AitsForm, { extends: 'form' });

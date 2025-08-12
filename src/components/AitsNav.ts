@@ -2,7 +2,7 @@ import { AitsElement } from './AitsElement';
 /**
  * <nav is="aits-nav">: 내비게이션 메뉴를 감싸는 컨테이너.
  */
-class AitsNav extends AitsElement {
+export class AitsNav extends AitsElement {
     constructor() {
         super();
     }
@@ -15,4 +15,3 @@ class AitsNav extends AitsElement {
         `;
     }
 }
-customElements.define('aits-nav', AitsNav, { extends: 'nav' });

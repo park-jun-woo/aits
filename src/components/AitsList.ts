@@ -1,6 +1,6 @@
 import { AitsElement } from './AitsElement';
 
-class AitsList extends AitsElement {
+export class AitsList extends AitsElement {
     private _items: any[] = [];
     private itemTemplate: HTMLTemplateElement | null = null;
     private containerElement: HTMLElement | null = null;
@@ -75,5 +75,3 @@ class AitsList extends AitsElement {
         this.containerElement.insertBefore(fragment, this.itemTemplate);
     }
 }
-
-customElements.define('aits-list', AitsList);

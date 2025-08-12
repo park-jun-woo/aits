@@ -8,10 +8,23 @@
  * - 진행률 추적 시스템을 제공하여 Transition과 동기화할 수 있습니다.
  * - 지능적인 캐싱과 메모리 관리를 통해 애플리케이션 성능을 최적화합니다.
  * @author Aits Framework AI
- * @version 0.2.0
+ * @version 0.3.0
  */
 
 import type { Aits } from './Aits';
+
+/**
+ * Fetch API의 priority 옵션을 위한 타입
+ * @see https://developer.mozilla.org/en-US/docs/Web/API/Request/priority
+ */
+type RequestPriority = 'high' | 'low' | 'auto';
+
+/**
+ * fetchPriority 속성을 지원하는 HTMLElement 확장 인터페이스
+ */
+interface HTMLElementWithPriority extends HTMLElement {
+    fetchPriority?: RequestPriority;
+}
 
 // 로딩 진행률을 추적하기 위한 인터페이스
 export interface LoadingProgress {
@@ -24,7 +37,7 @@ export interface LoadingProgress {
 // 리소스 로딩 옵션
 export interface LoadOptions {
     cache?: boolean;                                    // 캐싱 여부 (기본: true)
-    priority?: 'high' | 'normal' | 'low';              // 로딩 우선순위
+    priority?: 'high' | 'low' | 'auto';                // 로딩 우선순위
     onProgress?: (progress: LoadingProgress) => void;   // 진행률 콜백
     signal?: AbortSignal;                               // 취소 신호
 }
@@ -63,6 +76,9 @@ export class Loader {
     
     // 진행률 추적을 위한 전역 리스너
     private globalProgressListeners: Set<(progress: LoadingProgress) => void>;
+    
+    // 캐시 정리 인터벌 ID
+    private cacheCleanupInterval: number | null = null;
 
     public constructor(aitsInstance: Aits) {
         this.aits = aitsInstance;
@@ -89,7 +105,10 @@ export class Loader {
         // 캐시 확인
         if (options.cache !== false) {
             const cached = this._getCached(this.htmlCache, src);
-            if (cached) return cached;
+            if (cached) {
+                options.onProgress?.({ loaded: 1, total: 1, progress: 1, resource: src });
+                return cached;
+            }
         }
         
         // 중복 요청 방지
@@ -125,7 +144,10 @@ export class Loader {
         // 캐시 확인
         if (options.cache !== false) {
             const cached = this._getCached(this.jsonCache, src);
-            if (cached) return cached;
+            if (cached) {
+                options.onProgress?.({ loaded: 1, total: 1, progress: 1, resource: src });
+                return cached;
+            }
         }
         
         // 중복 요청 방지
@@ -160,6 +182,7 @@ export class Loader {
         // 이미 로드된 스크립트 체크
         if (this.scriptCache.has(url)) {
             options.onProgress?.({ loaded: 1, total: 1, progress: 1, resource: src });
+            this._notifyGlobalListeners({ loaded: 1, total: 1, progress: 1, resource: src });
             return;
         }
         
@@ -168,11 +191,9 @@ export class Loader {
             script.src = url;
             script.async = true;
             
-            // 우선순위 설정
-            if (options.priority === 'high') {
-                script.fetchPriority = 'high';
-            } else if (options.priority === 'low') {
-                script.fetchPriority = 'low';
+            // 우선순위 설정 - 브라우저 지원 여부 체크
+            if (options.priority && 'fetchPriority' in script) {
+                (script as HTMLElementWithPriority).fetchPriority = options.priority;
             }
             
             // 취소 처리
@@ -180,12 +201,14 @@ export class Loader {
                 options.signal.addEventListener('abort', () => {
                     script.remove();
                     reject(new Error(`Script loading aborted: ${src}`));
-                });
+                }, { once: true });
             }
             
             script.onload = () => {
                 this.scriptCache.add(url);
-                options.onProgress?.({ loaded: 1, total: 1, progress: 1, resource: src });
+                const progress = { loaded: 1, total: 1, progress: 1, resource: src };
+                options.onProgress?.(progress);
+                this._notifyGlobalListeners(progress);
                 resolve();
             };
             
@@ -208,6 +231,7 @@ export class Loader {
         // 이미 로드된 스타일시트 체크
         if (this.styleCache.has(url)) {
             options.onProgress?.({ loaded: 1, total: 1, progress: 1, resource: src });
+            this._notifyGlobalListeners({ loaded: 1, total: 1, progress: 1, resource: src });
             return;
         }
         
@@ -216,11 +240,9 @@ export class Loader {
             link.rel = 'stylesheet';
             link.href = url;
             
-            // 우선순위 설정
-            if (options.priority === 'high') {
-                link.fetchPriority = 'high';
-            } else if (options.priority === 'low') {
-                link.fetchPriority = 'low';
+            // 우선순위 설정 - 브라우저 지원 여부 체크
+            if (options.priority && 'fetchPriority' in link) {
+                (link as HTMLElementWithPriority).fetchPriority = options.priority;
             }
             
             // 취소 처리
@@ -228,12 +250,14 @@ export class Loader {
                 options.signal.addEventListener('abort', () => {
                     link.remove();
                     reject(new Error(`Style loading aborted: ${src}`));
-                });
+                }, { once: true });
             }
             
             link.onload = () => {
                 this.styleCache.add(url);
-                options.onProgress?.({ loaded: 1, total: 1, progress: 1, resource: src });
+                const progress = { loaded: 1, total: 1, progress: 1, resource: src };
+                options.onProgress?.(progress);
+                this._notifyGlobalListeners(progress);
                 resolve();
             };
             
@@ -264,12 +288,15 @@ export class Loader {
             const values = Array.from(progressMap.values());
             const totalProgress = values.reduce((sum, p) => sum + p, 0) / resources.length;
             
-            onProgress?.({
+            const progress = {
                 loaded: totalProgress,
                 total: 1,
                 progress: totalProgress,
                 resource: 'batch'
-            });
+            };
+            
+            onProgress?.(progress);
+            this._notifyGlobalListeners(progress);
         };
         
         // 모든 리소스를 병렬로 로드
@@ -370,13 +397,14 @@ export class Loader {
      * 캐시를 수동으로 정리합니다.
      * @param maxAge - 이 시간(ms)보다 오래된 캐시 항목 제거
      */
-    public clearCache(maxAge?: number): void {
+    public clearCache(maxAge: number = 0): void {
         const now = Date.now();
-        const threshold = maxAge || 0;
+        let clearedSize = 0;
         
         // HTML 캐시 정리
         for (const [key, entry] of this.htmlCache.entries()) {
-            if (now - entry.timestamp > threshold) {
+            if (now - entry.timestamp > maxAge) {
+                clearedSize += entry.size;
                 this.currentCacheSize -= entry.size;
                 this.htmlCache.delete(key);
             }
@@ -384,13 +412,16 @@ export class Loader {
         
         // JSON 캐시 정리
         for (const [key, entry] of this.jsonCache.entries()) {
-            if (now - entry.timestamp > threshold) {
+            if (now - entry.timestamp > maxAge) {
+                clearedSize += entry.size;
                 this.currentCacheSize -= entry.size;
                 this.jsonCache.delete(key);
             }
         }
         
-        console.log(`[Aits Loader] Cache cleared. Current size: ${this._formatBytes(this.currentCacheSize)}`);
+        if (clearedSize > 0) {
+            console.log(`[Aits Loader] Cache cleared: ${this._formatBytes(clearedSize)}. Current size: ${this._formatBytes(this.currentCacheSize)}`);
+        }
     }
 
     /**
@@ -398,11 +429,14 @@ export class Loader {
      * @param src - 리소스 경로
      */
     public invalidate(src: string): void {
+        let invalidated = false;
+        
         // HTML 캐시에서 제거
         const htmlEntry = this.htmlCache.get(src);
         if (htmlEntry) {
             this.currentCacheSize -= htmlEntry.size;
             this.htmlCache.delete(src);
+            invalidated = true;
         }
         
         // JSON 캐시에서 제거
@@ -410,6 +444,16 @@ export class Loader {
         if (jsonEntry) {
             this.currentCacheSize -= jsonEntry.size;
             this.jsonCache.delete(src);
+            invalidated = true;
+        }
+        
+        // Script와 Style 캐시에서도 제거
+        const absoluteUrl = this._toAbsoluteUrl(src);
+        if (this.scriptCache.delete(absoluteUrl)) invalidated = true;
+        if (this.styleCache.delete(absoluteUrl)) invalidated = true;
+        
+        if (invalidated) {
+            console.log(`[Aits Loader] Cache invalidated for: ${src}`);
         }
     }
 
@@ -418,18 +462,49 @@ export class Loader {
      */
     public getCacheStats(): {
         size: number;
+        sizeFormatted: string;
         htmlEntries: number;
         jsonEntries: number;
         scriptEntries: number;
         styleEntries: number;
+        maxSize: number;
+        maxSizeFormatted: string;
+        usage: number; // 사용률 (0-1)
     } {
         return {
             size: this.currentCacheSize,
+            sizeFormatted: this._formatBytes(this.currentCacheSize),
             htmlEntries: this.htmlCache.size,
             jsonEntries: this.jsonCache.size,
             scriptEntries: this.scriptCache.size,
-            styleEntries: this.styleCache.size
+            styleEntries: this.styleCache.size,
+            maxSize: this.MAX_CACHE_SIZE,
+            maxSizeFormatted: this._formatBytes(this.MAX_CACHE_SIZE),
+            usage: this.currentCacheSize / this.MAX_CACHE_SIZE
         };
+    }
+
+    /**
+     * 리소스 로더를 정리합니다. (메모리 해제)
+     */
+    public destroy(): void {
+        // 캐시 정리 인터벌 중지
+        if (this.cacheCleanupInterval) {
+            clearInterval(this.cacheCleanupInterval);
+            this.cacheCleanupInterval = null;
+        }
+        
+        // 모든 캐시 삭제
+        this.htmlCache.clear();
+        this.jsonCache.clear();
+        this.scriptCache.clear();
+        this.styleCache.clear();
+        this.pendingRequests.clear();
+        this.globalProgressListeners.clear();
+        
+        this.currentCacheSize = 0;
+        
+        console.log('[Aits Loader] Destroyed and all caches cleared');
     }
 
     // === Private Helper Methods ===
@@ -445,10 +520,16 @@ export class Loader {
         const url = this._toAbsoluteUrl(src);
         
         try {
-            const response = await fetch(url, {
-                signal: options.signal,
-                priority: options.priority as RequestPriority
-            });
+            const fetchOptions: RequestInit = {
+                signal: options.signal
+            };
+            
+            // priority는 실험적 기능이므로 체크 후 추가
+            if (options.priority && 'priority' in Request.prototype) {
+                (fetchOptions as any).priority = options.priority;
+            }
+            
+            const response = await fetch(url, fetchOptions);
             
             if (!response.ok) {
                 throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -584,19 +665,26 @@ export class Loader {
             allEntries.push([key, entry, this.jsonCache]);
         }
         
-        // 사용 횟수와 타임스탬프로 정렬
+        // 사용 횟수와 타임스탬프로 정렬 (점수가 낮을수록 제거 우선순위 높음)
         allEntries.sort((a, b) => {
-            const scoreA = a[1].usage + (Date.now() - a[1].timestamp) / 1000;
-            const scoreB = b[1].usage + (Date.now() - b[1].timestamp) / 1000;
+            const scoreA = a[1].usage * 1000 - (Date.now() - a[1].timestamp);
+            const scoreB = b[1].usage * 1000 - (Date.now() - b[1].timestamp);
             return scoreA - scoreB;
         });
         
         // 캐시 크기의 20%를 정리
         const targetSize = this.MAX_CACHE_SIZE * 0.8;
+        let evictedCount = 0;
+        
         while (this.currentCacheSize > targetSize && allEntries.length > 0) {
             const [key, entry, cache] = allEntries.shift()!;
             this.currentCacheSize -= entry.size;
             cache.delete(key);
+            evictedCount++;
+        }
+        
+        if (evictedCount > 0) {
+            console.log(`[Aits Loader] LRU evicted ${evictedCount} entries. Current size: ${this._formatBytes(this.currentCacheSize)}`);
         }
     }
 
@@ -606,8 +694,12 @@ export class Loader {
     private _estimateSize(data: any): number {
         if (typeof data === 'string') {
             return data.length * 2; // UTF-16 기준
-        } else if (typeof data === 'object') {
-            return JSON.stringify(data).length * 2;
+        } else if (typeof data === 'object' && data !== null) {
+            try {
+                return JSON.stringify(data).length * 2;
+            } catch {
+                return 1024; // JSON 변환 실패 시 기본값
+            }
         }
         return 0;
     }
@@ -616,6 +708,10 @@ export class Loader {
      * 상대 경로를 절대 URL로 변환합니다.
      */
     private _toAbsoluteUrl(src: string): string {
+        // 이미 절대 URL인 경우 그대로 반환
+        if (/^https?:\/\//.test(src)) {
+            return src;
+        }
         return new URL(src, window.location.href).href;
     }
 
@@ -634,14 +730,25 @@ export class Loader {
      * 전역 진행률 리스너들에게 알립니다.
      */
     private _notifyGlobalListeners(progress: LoadingProgress): void {
-        this.globalProgressListeners.forEach(listener => listener(progress));
+        if (this.globalProgressListeners.size > 0) {
+            this.globalProgressListeners.forEach(listener => {
+                try {
+                    listener(progress);
+                } catch (error) {
+                    console.error('[Aits Loader] Error in global progress listener:', error);
+                }
+            });
+        }
     }
 
     /**
      * 주기적인 캐시 정리를 시작합니다.
      */
     private _startCacheCleanup(): void {
-        setInterval(() => {
+        // 이미 실행 중이면 중복 실행 방지
+        if (this.cacheCleanupInterval) return;
+        
+        this.cacheCleanupInterval = window.setInterval(() => {
             this.clearCache(this.MAX_CACHE_AGE);
         }, 60 * 1000); // 1분마다 실행
     }

@@ -6,7 +6,7 @@ import { AitsElement } from './AitsElement';
  * <footer is="aits-footer">: 페이지의 푸터 영역을 정의하는 컨테이너 컴포넌트.
  * 내부에 슬롯을 두어 자식 요소들을 그대로 표시합니다.
  */
-class AitsFooter extends AitsElement {
+export class AitsFooter extends AitsElement {
     constructor() {
         super();
     }
@@ -36,6 +36,3 @@ class AitsFooter extends AitsElement {
         `;
     }
 }
-
-// 'aits-footer'라는 이름으로 커스텀 엘리먼트를 등록합니다.
-customElements.define('aits-footer', AitsFooter, { extends: 'footer' });

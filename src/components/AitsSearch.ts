@@ -2,7 +2,7 @@ import { AitsElement } from './AitsElement';
 /**
  * <aits-search>: 검색 입력을 위한 컴포넌트.
  */
-class AitsSearch extends AitsElement {
+export class AitsSearch extends AitsElement {
     connectedCallback() {
         super.connectedCallback();
         this.shadow.querySelector('button')?.addEventListener('click', () => {
@@ -20,4 +20,3 @@ class AitsSearch extends AitsElement {
         `;
     }
 }
-customElements.define('aits-search', AitsSearch);
