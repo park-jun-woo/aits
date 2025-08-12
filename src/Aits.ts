@@ -15,6 +15,7 @@ import { Loader } from './Loader'; // 모든 리소스 로딩을 담당
 import { Context } from './Context'; // 컨트롤러에게 주입될 실행 컨텍스트
 import { Controller } from './Controller'; // 모든 컨트롤러의 기반 클래스
 import { Model } from './Model'; // 모든 모델의 기반 클래스
+import { Renderer } from './Renderer';
 import { IApiAdapter, DefaultApiAdapter } from './ApiAdapter'; // ApiAdapter import
 
 // 라우팅 규칙을 정의하기 위한 타입
@@ -31,6 +32,7 @@ export class Aits {
     private controllers: Map<string, Promise<Controller>>;
     private models: Map<string, Model>;
     private modelPaths: Map<string, string>;
+    private renderer:Renderer;
     private activeController: Controller | null;
     private isRunning: boolean;
 
@@ -41,6 +43,7 @@ export class Aits {
         this.controllers = new Map();
         this.models = new Map();
         this.modelPaths = new Map();
+        this.renderer = new Renderer(this);
         this.activeController = null;
         this.isRunning = false;
 
@@ -244,13 +247,9 @@ export class Aits {
         this.navigator.navigate(url);
     }
 
-    // --- Loader 프록시 메소드들 ---
-    public header(src: string, onLoad?: (el: HTMLElement) => void) {
-        return this.loader.header(src, onLoad);
-    }
-    
-    public footer(src: string, onLoad?: (el: HTMLElement) => void) {
-        return this.loader.footer(src, onLoad);
+    getView
+    public render(html: string): HTMLElement {
+        return this.renderer.render(html);
     }
 
     public view(src: string, onLoad?: (el: HTMLElement) => void) {

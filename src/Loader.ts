@@ -18,144 +18,104 @@ type CacheEntry = {
 
 export class Loader {
     private aits: Aits;
-    private layoutCache: Map<string, CacheEntry>;
-    private viewCache: Map<string, CacheEntry>;
+    private promiseCache: Map<string, CacheEntry>;
+    private templateCache: Map<string, string>;
     private viewUsage: Map<string, number>; // 뷰의 마지막 사용 시간을 기록 (for LRU)
     private readonly MAX_VIEWS_IN_CACHE: number = 10; // 메모리에 유지할 최대 뷰 개수
 
     public constructor(aitsInstance: Aits) {
         this.aits = aitsInstance;
-        this.layoutCache = new Map();
-        this.viewCache = new Map();
+        this.promiseCache = new Map();
+        this.templateCache = new Map();
         this.viewUsage = new Map();
     }
 
     /**
-     * Header HTML 파일을 로드하여 DOM 최상단에 추가합니다.
-     * @param src - 로드할 HTML 파일의 경로
-     * @param onLoad - 헤더가 DOM에 추가된 후 실행될 콜백 함수
-     * @returns 헤더의 HTMLElement를 resolve하는 Promise
+     * ViewManager나 Controller가 원본 HTML 템플릿을 가져가기 위한 핵심 메서드.
+     * @param src - 가져올 HTML 파일의 경로
+     * @returns 원본 HTML 텍스트 또는 undefined
      */
-    public async header(src: string, onLoad?: (el: HTMLElement) => void): Promise<HTMLElement> {
-        const cacheKey = `layout:${src}`;
-
-        // 1. layoutCache 확인
-        if (this.layoutCache.has(cacheKey)) {
-            // 캐시된 Promise를 반환하여 중복 실행 방지
-            return this.layoutCache.get(cacheKey)!.promise;
+    public async getView(src: string): Promise<string | undefined> {
+        if (this.templateCache.has(src)) {
+            return this.templateCache.get(src);
         }
-
-        // 2. Promise를 생성하고 바로 캐시에 저장
-        const promise = new Promise<HTMLElement>(async (resolve, reject) => {
-            try {
-                document.body.querySelector('header')?.remove();
-                const html = await this._fetchHtml(src);
-                const element = this._createElementFromHtml(html);
-                const headerElement = element.tagName === 'HEADER' ? element : this._wrapInTag(element, 'header');
-                
-                document.body.insertAdjacentElement('afterbegin', headerElement);
-
-                onLoad?.(headerElement);
-                this.aits.updatePageLinks();
-                resolve(headerElement);
-            } catch (err) {
-                // 실패 시 캐시에서 제거
-                this.layoutCache.delete(cacheKey);
-                reject(err);
-            }
-        });
-
-        this.layoutCache.set(cacheKey, { promise });
-        return promise;
+        // 캐시에 없으면 fetch 후 저장
+        const html = await this._fetchHtml(src);
+        this.templateCache.set(src, html);
+        return html;
     }
 
     /**
-     * Footer HTML 파일을 로드하여 DOM 최하단에 추가합니다.
-     * @param src - 로드할 HTML 파일의 경로
-     * @param onLoad - 푸터가 DOM에 추가된 후 실행될 콜백 함수
-     * @returns 푸터의 HTMLElement를 resolve하는 Promise
+     * Header HTML을 로드하고 렌더링된 HTMLElement의 Promise를 반환합니다.
      */
-    public async footer(src: string, onLoad?: (el: HTMLElement) => void): Promise<HTMLElement> {
-        const cacheKey = `layout:footer:${src}`;
-
-        // 1. layoutCache에 동일한 푸터가 있는지 확인
-        if (this.layoutCache.has(cacheKey)) {
-            return this.layoutCache.get(cacheKey)!.promise;
+    public async header(src: string): Promise<HTMLElement> {
+        const cacheKey = `header:${src}`;
+        if (this.promiseCache.has(cacheKey)) {
+            return this.promiseCache.get(cacheKey)!.promise;
         }
 
-        // 2. Promise를 생성하고 즉시 캐시에 저장하여 중복 호출 방지
-        const promise = new Promise<HTMLElement>(async (resolve, reject) => {
-            try {
-                // 기존 footer가 있다면 제거
-                document.body.querySelector('footer')?.remove();
-                
-                const html = await this._fetchHtml(src);
-                const element = this._createElementFromHtml(html);
-                
-                // <footer> 태그로 감싸져 있는지 확인하고, 아니면 감싸기
-                const footerElement = element.tagName === 'FOOTER' ? element : this._wrapInTag(element, 'footer');
-                
-                // body의 가장 마지막 자식으로 삽입
-                document.body.appendChild(footerElement);
-
-                onLoad?.(footerElement);
-                this.aits.updatePageLinks();
-                resolve(footerElement);
-            } catch (err) {
-                // 실패 시 캐시에서 제거
-                this.layoutCache.delete(cacheKey);
-                reject(err);
-            }
-        });
-
-        this.layoutCache.set(cacheKey, { promise });
-        return promise;
-    }
-
-    /**
-     * HTML 뷰 파일을 로드하여 DOM에 추가하고, 캐싱합니다.
-     * @param src - 로드할 HTML 파일의 경로
-     * @param onLoad - 뷰가 DOM에 추가된 후 실행될 콜백 함수
-     * @returns 뷰의 HTMLElement를 resolve하는 Promise
-     */
-    public async view(src: string, onLoad?: (el: HTMLElement) => void): Promise<HTMLElement> {
-        const cacheKey = `view:${src}`;
-        
-        // 1. 캐시 확인: 이미 로드된 뷰가 있다면 캐시에서 반환
-        if (this.viewCache.has(cacheKey)) {
-            const entry = this.viewCache.get(cacheKey)!;
-            this.viewUsage.set(cacheKey, Date.now()); // 사용 시간 갱신
-            return entry.promise;
-        }
-
-        // 2. 캐시 없음: 새로운 뷰 로드
-        const promise = this._fetchHtml(src)
+        const promise = this.getView(src)
             .then(html => {
-                // <main> 요소가 없으면 생성
-                let main = document.body.querySelector('main');
-                if (!main) {
-                    main = document.createElement('main');
-                    document.body.appendChild(main);
-                }
-                
-                // HTML 문자열을 실제 HTMLElement로 변환하여 main에 추가
-                const element = this._createElementFromHtml(html);
-                element.dataset.viewSrc = src; // 디버깅을 위해 소스 경로 저장
-                element.hidden = true; // 기본적으로 숨김 처리
-                main.appendChild(element);
+                if (!html) throw new Error(`Header HTML not found at: ${src}`);
+                // 렌더링 책임을 ViewManager에게 위임하여 메모리상에 Element 생성
+                return this.aits.render(html);
+            })
+            .catch(err => {
+                this.promiseCache.delete(cacheKey);
+                throw err;
+            });
+        
+        this.promiseCache.set(cacheKey, { promise });
+        return promise;
+    }
 
-                onLoad?.(element); // 로드 완료 후 콜백 실행
-                this.aits.updatePageLinks(); // 새로운 링크가 추가되었을 수 있으므로 갱신
+    /**
+     * Footer HTML을 로드하고 렌더링된 HTMLElement의 Promise를 반환합니다.
+     */
+    public async footer(src: string): Promise<HTMLElement> {
+        const cacheKey = `footer:${src}`;
+        if (this.promiseCache.has(cacheKey)) {
+            return this.promiseCache.get(cacheKey)!.promise;
+        }
+
+        const promise = this.getView(src)
+            .then(html => {
+                if (!html) throw new Error(`Footer HTML not found at: ${src}`);
+                return this.aits.render(html);
+            })
+            .catch(err => {
+                this.promiseCache.delete(cacheKey);
+                throw err;
+            });
+
+        this.promiseCache.set(cacheKey, { promise });
+        return promise;
+    }
+
+    /**
+     * View HTML을 로드하고 렌더링된 HTMLElement의 Promise를 반환합니다.
+     */
+    public async view(src: string): Promise<HTMLElement> {
+        const cacheKey = `view:${src}`;
+        if (this.promiseCache.has(cacheKey)) {
+            this.viewUsage.set(cacheKey, Date.now());
+            return this.promiseCache.get(cacheKey)!.promise;
+        }
+
+        const promise = this.getView(src)
+            .then(html => {
+                if (!html) throw new Error(`View HTML not found at: ${src}`);
+                const element = this.aits.render(html);
+                element.dataset.viewSrc = src; // 디버깅용 정보는 유지
+                element.hidden = true;         // 화면 전환 효과를 위해 기본 숨김
                 return element;
             })
             .catch(err => {
-                // 로딩 실패 시 캐시에서 해당 키를 삭제
-                this.viewCache.delete(cacheKey);
+                this.promiseCache.delete(cacheKey);
                 this.viewUsage.delete(cacheKey);
-                throw err; // 에러를 다시 던져서 호출한 쪽에서 처리할 수 있도록 함
+                throw err;
             });
 
-        // 3. 캐시에 새로운 뷰의 Promise를 저장하고, 메모리 관리 실행
         this._cacheView(cacheKey, { promise });
         return promise;
     }
