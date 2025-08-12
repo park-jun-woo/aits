@@ -1,168 +1,337 @@
 /**
- * Aits UI - Web Components Library
- * ---------------------------------
- * 이 파일은 Aits 프레임워크의 모든 UI 웹 컴포넌트 코드를 포함합니다.
- * 각 컴포넌트는 명확한 역할을 가지며, Controller와의 상호작용을 위해
- * CustomEvent를 사용하여 느슨하게 결합되어 있습니다.
- *
+ * =================================================================
+ * AitsElement.ts - AITS 컴포넌트 기반 클래스
+ * =================================================================
+ * @description
+ * - 모든 AITS 컴포넌트의 부모 클래스입니다.
+ * - customElements.define을 사용하지 않고 Renderer가 직접 활성화합니다.
+ * - Shadow DOM, 데이터 바인딩, 이벤트 처리 등 공통 기능을 제공합니다.
  * @author Aits Framework AI
- * @version 0.1.0
+ * @version 0.3.0
  */
 
-// === 1. AitsElement: 모든 컴포넌트의 기반 클래스 ===
-/**
- * AitsElement는 모든 aits-* 컴포넌트의 부모 클래스입니다.
- * Shadow DOM 설정, 스타일 주입, 데이터 렌더링 헬퍼 등
- * 공통적인 기능을 제공하여 코드 중복을 최소화합니다.
- */
+// 컴포넌트 상태 타입
+export interface ComponentState {
+    loading: boolean;
+    error: string | null;
+    initialized: boolean;
+}
+
+// 데이터 변경 이벤트
+export interface DataChangeEvent<T = any> {
+    oldValue: T | null;
+    newValue: T | null;
+    property: string;
+}
+
 export class AitsElement extends HTMLElement {
+    // Shadow DOM 루트
     protected shadow: ShadowRoot;
-    private _data: object | null = null; // 데이터 저장을 위한 private 속성
-    protected template: string = '';       // 초기 템플릿을 저장할 변수
-    private _observer: MutationObserver | null = null;
+    
+    // 컴포넌트 데이터
+    private _data: any = null;
+    private _items: any[] = [];
+    private _options: Record<string, any> = {};
+    
+    // 컴포넌트 상태
+    private _state: ComponentState = {
+        loading: false,
+        error: null,
+        initialized: false
+    };
+    
+    // 템플릿 캐싱
+    protected template: string = '';
+    private compiledTemplate: Function | null = null;
+    
+    // 이벤트 리스너 추적
+    private eventListeners: Map<string, Set<EventListener>> = new Map();
+    
+    // 활성화 상태
+    private _activated: boolean = false;
+    
+    // MutationObserver
+    private observer: MutationObserver | null = null;
 
     constructor() {
         super();
         this.shadow = this.attachShadow({ mode: 'open' });
     }
 
+    // === 생명주기 메서드 ===
+
     /**
-     * 컴포넌트의 'data' 속성에 접근하기 위한 getter.
+     * 컴포넌트가 DOM에 연결될 때
      */
-    get data(): object | null {
+    connectedCallback(): void {
+        if (!this._state.initialized) {
+            this.template = this.innerHTML;
+            this.innerHTML = '';
+            this._state.initialized = true;
+        }
+        
+        this.render();
+        this.afterRender();
+        
+        // 활성화 상태 확인
+        this._activated = true;
+        this.dispatchComponentEvent('connected');
+    }
+
+    /**
+     * 컴포넌트가 DOM에서 제거될 때
+     */
+    disconnectedCallback(): void {
+        this.cleanup();
+        this._activated = false;
+        this.dispatchComponentEvent('disconnected');
+    }
+
+    /**
+     * 속성이 변경될 때
+     */
+    attributeChangedCallback(name: string, oldValue: string | null, newValue: string | null): void {
+        this.onAttributeChange(name, oldValue, newValue);
+    }
+
+    /**
+     * 관찰할 속성 목록
+     */
+    static get observedAttributes(): string[] {
+        return ['data-bind', 'data-items', 'data-options'];
+    }
+
+    // === 데이터 관리 ===
+
+    /**
+     * 단일 데이터 getter/setter
+     */
+    get data(): any {
         return this._data;
     }
 
-    /**
-     * Controller 등 외부에서 컴포넌트에 데이터를 주입하기 위한 setter.
-     * 데이터가 변경되면 자동으로 render()를 호출하여 UI를 업데이트합니다.
-     */
-    set data(value: object | null) {
+    set data(value: any) {
+        const oldValue = this._data;
         this._data = value;
+        this.onDataChange('data', oldValue, value);
         this.render();
     }
 
     /**
-     * 컴포넌트가 DOM에 연결될 때 호출됩니다.
-     * 이 시점에 초기 HTML을 템플릿으로 저장하고 렌더링을 실행합니다.
+     * 목록 데이터 getter/setter
      */
-    connectedCallback() {
-        // 컴포넌트의 초기 자식 HTML을 템플릿으로 저장
-        if (!this.template) {
-            this.template = this.innerHTML;
-            this.innerHTML = ''; // 초기 템플릿이 화면에 잠시 보이는 것을 방지
-        }
+    get items(): any[] {
+        return this._items;
+    }
+
+    set items(value: any[]) {
+        const oldValue = this._items;
+        this._items = value || [];
+        this.onDataChange('items', oldValue, value);
         this.render();
-        this._reconnectObserver(); // Observer 연결
     }
 
     /**
-     * 컴포넌트가 DOM에서 제거될 때 호출됩니다.
-     * 메모리 누수를 방지하기 위해 Observer 연결을 해제합니다.
+     * 옵션 데이터 getter/setter
      */
-    disconnectedCallback() {
-        this._observer?.disconnect();
+    get options(): Record<string, any> {
+        return this._options;
+    }
+
+    set options(value: Record<string, any>) {
+        const oldValue = this._options;
+        this._options = value || {};
+        this.onDataChange('options', oldValue, value);
+        this.render();
     }
 
     /**
-     * 컴포넌트의 뷰를 렌더링합니다.
-     * 데이터가 있으면 템플릿과 데이터를 바인딩하여 Shadow DOM에 내용을 채웁니다.
-     * 하위 클래스에서 필요에 따라 이 메소드를 오버라이드할 수 있습니다.
+     * 컴포넌트 상태 getter
      */
-    protected render() {
-        if (!this._data) {
-            // 데이터가 없을 때의 기본 동작 (예: 로딩 상태 표시)
-            // <slot>을 사용하여 자식 노드로 로딩 상태를 정의할 수 있게 함
-            this.shadow.innerHTML = `<slot name="loading">Loading...</slot>`;
+    get state(): ComponentState {
+        return this._state;
+    }
+
+    /**
+     * 활성화 상태 확인
+     */
+    get isActivated(): boolean {
+        return this._activated || (this as any).__aitsActivated === true;
+    }
+
+    // === 렌더링 ===
+
+    /**
+     * 컴포넌트를 렌더링합니다.
+     */
+    protected render(): void {
+        if (this._state.loading) {
+            this.renderLoading();
             return;
         }
 
-        // 데이터가 있으면, 저장된 템플릿과 현재 데이터를 사용하여 HTML을 생성
-        this.shadow.innerHTML = this.simpleTemplate(this.template, this._data);
-    }
-
-    /**
-     * part 속성 동기화를 위한 MutationObserver를 설정하고 실행합니다.
-     * Light DOM의 part 속성 변경을 감지하여 Shadow DOM으로 복제합니다.
-     */
-    private _reconnectObserver() {
-        if (this._observer) this._observer.disconnect();
-
-        // 섀도 루트 내부의 part 속성을 가진 모든 요소를 추적합니다.
-        const shadowParts = Array.from(this.shadow.querySelectorAll('[part]'));
-        if (shadowParts.length === 0) return; // 추적할 part가 없으면 실행하지 않음
-
-        const partMap = new Map<string, Element[]>();
-        shadowParts.forEach(element => {
-            const partName = element.getAttribute('part')!;
-            if (!partMap.has(partName)) {
-                partMap.set(partName, []);
-            }
-            partMap.get(partName)!.push(element);
-        });
-
-        const callback = (mutationsList: MutationRecord[]) => {
-            for (const mutation of mutationsList) {
-                if (mutation.type === 'attributes' && mutation.attributeName === 'part') {
-                    const target = mutation.target as Element;
-                    const lightParts = (target.getAttribute('part') || '').split(' ').filter(p => p);
-                    
-                    // Shadow DOM의 모든 part를 순회하며 클래스처럼 동기화
-                    partMap.forEach((elements, partName) => {
-                        elements.forEach(shadowElement => {
-                            if (lightParts.includes(partName)) {
-                                shadowElement.setAttribute('part', partName);
-                            }
-                        });
-                    });
-                }
-            }
-        };
-
-        this._observer = new MutationObserver(callback);
-        this._observer.observe(this, {
-            attributes: true,       // 호스트 요소의 속성 변경 감지
-            attributeFilter: ['part'], // 'part' 속성에만 집중
-            subtree: true,          // 자식 요소의 변경도 감지
-        });
-        
-        // 초기 동기화 실행
-        this._syncParts();
-    }
-    
-    /**
-     * Light DOM과 Shadow DOM 간의 part 속성을 즉시 동기화합니다.
-     */
-    private _syncParts() {
-        // 호스트(this)에 정의된 part 속성을 섀도 루트의 첫 번째 자식에게 복사
-        const hostParts = this.getAttribute('part');
-        if (hostParts && this.shadow.firstElementChild) {
-            this.shadow.firstElementChild.setAttribute('part', hostParts);
+        if (this._state.error) {
+            this.renderError(this._state.error);
+            return;
         }
-    
-        // 자식(Light DOM)에 정의된 part 속성을 이름이 같은 섀도 요소에 복사
-        const lightPartElements = this.querySelectorAll('[part]');
-        lightPartElements.forEach(lightElement => {
-            const partValue = lightElement.getAttribute('part');
-            if(partValue) {
-                const shadowElement = this.shadow.querySelector(`[part="${partValue}"]`);
-                if(shadowElement) {
-                    // 이미 존재하는 part 속성을 그대로 유지하면서 클래스처럼 추가/제어 가능
-                    // 이 예제에서는 간단히 덮어쓰기로 구현
-                    shadowElement.setAttribute('part', partValue);
-                }
-            }
+
+        if (!this._data && this._items.length === 0) {
+            this.renderEmpty();
+            return;
+        }
+
+        // 템플릿 렌더링
+        const html = this.renderTemplate(this.template, {
+            data: this._data,
+            items: this._items,
+            options: this._options
         });
+
+        this.shadow.innerHTML = html;
+        this.applyStyles();
     }
 
+    /**
+     * 로딩 상태 렌더링
+     */
+    protected renderLoading(): void {
+        this.shadow.innerHTML = `
+            <div class="aits-loading">
+                <slot name="loading">Loading...</slot>
+            </div>
+        `;
+    }
 
     /**
-     * Controller에 이벤트를 전달하기 위한 표준 메소드입니다.
-     * @param eventName - 이벤트 이름 (예: 'aits-search')
-     * @param detail - 이벤트와 함께 전달할 데이터
+     * 에러 상태 렌더링
      */
-    protected dispatchEventToController(eventName: string, detail: any) {
-        this.dispatchEvent(new CustomEvent(eventName, {
+    protected renderError(error: string): void {
+        this.shadow.innerHTML = `
+            <div class="aits-error">
+                <slot name="error">${error}</slot>
+            </div>
+        `;
+    }
+
+    /**
+     * 빈 상태 렌더링
+     */
+    protected renderEmpty(): void {
+        this.shadow.innerHTML = `
+            <div class="aits-empty">
+                <slot name="empty">No data available</slot>
+            </div>
+        `;
+    }
+
+    /**
+     * 스타일 적용
+     */
+    protected applyStyles(): void {
+        const style = document.createElement('style');
+        style.textContent = this.getStyles();
+        
+        const existingStyle = this.shadow.querySelector('style');
+        if (existingStyle) {
+            existingStyle.replaceWith(style);
+        } else {
+            this.shadow.prepend(style);
+        }
+    }
+
+    /**
+     * 컴포넌트 스타일 정의 (오버라이드 가능)
+     */
+    protected getStyles(): string {
+        return `
+            :host {
+                display: block;
+                box-sizing: border-box;
+            }
+            
+            .aits-loading,
+            .aits-error,
+            .aits-empty {
+                padding: 1rem;
+                text-align: center;
+                color: var(--text-secondary, #666);
+            }
+            
+            .aits-error {
+                color: var(--error-color, #d32f2f);
+            }
+        `;
+    }
+
+    // === 템플릿 처리 ===
+
+    /**
+     * 템플릿 렌더링 (개선된 버전)
+     */
+    protected renderTemplate(template: string, context: any): string {
+        // 템플릿 컴파일 (캐싱)
+        if (!this.compiledTemplate) {
+            this.compiledTemplate = this.compileTemplate(template);
+        }
+
+        try {
+            return this.compiledTemplate(context);
+        } catch (error) {
+            console.error('[AitsElement] Template rendering error:', error);
+            return '';
+        }
+    }
+
+    /**
+     * 템플릿 컴파일
+     */
+    private compileTemplate(template: string): Function {
+        // 간단한 템플릿 엔진 구현
+        return (context: any) => {
+            return template
+                // 변수 치환 ${variable}
+                .replace(/\$\{([^}]+)\}/g, (match, path) => {
+                    const value = this.getNestedValue(context, path.trim());
+                    return value !== undefined ? String(value) : '';
+                })
+                // 조건문 ${if:condition}...${/if}
+                .replace(/\$\{if:([^}]+)\}([\s\S]*?)\$\{\/if\}/g, (match, condition, content) => {
+                    const value = this.getNestedValue(context, condition.trim());
+                    return value ? content : '';
+                })
+                // 반복문 ${each:items}...${/each}
+                .replace(/\$\{each:([^}]+)\}([\s\S]*?)\$\{\/each\}/g, (match, path, content) => {
+                    const items = this.getNestedValue(context, path.trim());
+                    if (!Array.isArray(items)) return '';
+                    
+                    return items.map((item, index) => {
+                        return content
+                            .replace(/\$\{item\.([^}]+)\}/g, (_match: string, prop: string) => {
+                                const value = this.getNestedValue(item, prop.trim());
+                                return value !== undefined ? String(value) : '';
+                            })
+                            .replace(/\$\{index\}/g, String(index));
+                    }).join('');
+                });
+        };
+    }
+
+    /**
+     * 중첩된 객체에서 값 가져오기
+     */
+    private getNestedValue(obj: any, path: string): any {
+        return path.split('.').reduce((current, key) => {
+            return current?.[key];
+        }, obj);
+    }
+
+    // === 이벤트 처리 ===
+
+    /**
+     * 컴포넌트 이벤트 발생
+     */
+    protected dispatchComponentEvent(eventName: string, detail?: any): void {
+        this.dispatchEvent(new CustomEvent(`aits-${eventName}`, {
             detail,
             bubbles: true,
             composed: true
@@ -170,50 +339,151 @@ export class AitsElement extends HTMLElement {
     }
 
     /**
-     * 간단한 템플릿 렌더링 헬퍼. (기능 개선 버전)
-     * DOM 구조를 분석하여 <template> 태그 내부에 있는 플레이스홀더는 무시합니다.
-     * @param templateHtml - HTML 템플릿 문자열
-     * @param data - 템플릿에 채워넣을 데이터 객체
-     * @returns 데이터가 채워진 HTML 문자열
+     * 이벤트 리스너 추가 (자동 정리)
      */
-    protected simpleTemplate(templateHtml: string, data: object): string {
-        const tempDiv = document.createElement('div');
-        tempDiv.innerHTML = templateHtml;
-
-        // TreeWalker를 사용해 모든 텍스트 노드를 순회합니다.
-        const walker = document.createTreeWalker(tempDiv, NodeFilter.SHOW_TEXT);
-        const nodesToProcess: Node[] = [];
-
-        while (walker.nextNode()) {
-            const currentNode = walker.currentNode;
-            let inTemplateTag = false;
-            let parent = currentNode.parentNode;
-
-            // 현재 노드의 상위 노드 중 <template>이 있는지 확인합니다.
-            while (parent && parent !== tempDiv) {
-                if (parent.nodeName === 'TEMPLATE') {
-                    inTemplateTag = true;
-                    break;
-                }
-                parent = parent.parentNode;
-            }
-
-            // <template> 태그 안에 있지 않고, 플레이스홀더를 포함하는 경우에만 처리 목록에 추가합니다.
-            if (!inTemplateTag && currentNode.nodeValue?.includes('${')) {
-                nodesToProcess.push(currentNode);
-            }
+    public on(eventType: string, handler: EventListener): void {
+        if (!this.eventListeners.has(eventType)) {
+            this.eventListeners.set(eventType, new Set());
         }
+        
+        this.eventListeners.get(eventType)!.add(handler);
+        this.addEventListener(eventType, handler);
+    }
 
-        // 실제 치환 작업은 순회가 끝난 후 일괄 처리합니다.
-        nodesToProcess.forEach(node => {
-            if (node.nodeValue) {
-                node.nodeValue = node.nodeValue.replace(/\$\{(\w+|\w+\.\w+)\}/g, (match, key) => {
-                    const value = key.split('.').reduce((o: any, k: string) => (o || {})[k], data);
-                    return value !== undefined ? String(value) : '';
-                });
-            }
+    /**
+     * 이벤트 리스너 제거
+     */
+    public off(eventType: string, handler?: EventListener): void {
+        if (!this.eventListeners.has(eventType)) return;
+        
+        const handlers = this.eventListeners.get(eventType)!;
+        
+        if (handler) {
+            handlers.delete(handler);
+            this.removeEventListener(eventType, handler);
+        } else {
+            // 모든 핸들러 제거
+            handlers.forEach(h => this.removeEventListener(eventType, h));
+            handlers.clear();
+        }
+    }
+
+    /**
+     * 한 번만 실행되는 이벤트 리스너
+     */
+    public once(eventType: string, handler: EventListener): void {
+        const onceHandler = (event: Event) => {
+            handler(event);
+            this.off(eventType, onceHandler);
+        };
+        
+        this.on(eventType, onceHandler);
+    }
+
+    // === 콜백 메서드 (오버라이드 가능) ===
+
+    /**
+     * 데이터 변경 시 호출
+     */
+    protected onDataChange(property: string, oldValue: any, newValue: any): void {
+        this.dispatchComponentEvent('data-change', {
+            property,
+            oldValue,
+            newValue
+        } as DataChangeEvent);
+    }
+
+    /**
+     * 속성 변경 시 호출
+     */
+    protected onAttributeChange(name: string, oldValue: string | null, newValue: string | null): void {
+        // 하위 클래스에서 구현
+    }
+
+    /**
+     * 렌더링 완료 후 호출
+     */
+    protected afterRender(): void {
+        // 하위 클래스에서 구현
+    }
+
+    // === 유틸리티 메서드 ===
+
+    /**
+     * 로딩 상태 설정
+     */
+    public setLoading(loading: boolean): void {
+        this._state.loading = loading;
+        this.render();
+    }
+
+    /**
+     * 에러 상태 설정
+     */
+    public setError(error: string | null): void {
+        this._state.error = error;
+        this.render();
+    }
+
+    /**
+     * Shadow DOM 내의 요소 검색
+     */
+    public $(selector: string): Element | null {
+        return this.shadow.querySelector(selector);
+    }
+
+    /**
+     * Shadow DOM 내의 모든 요소 검색
+     */
+    public $$(selector: string): NodeListOf<Element> {
+        return this.shadow.querySelectorAll(selector);
+    }
+
+    /**
+     * 슬롯 콘텐츠 가져오기
+     */
+    public getSlot(name?: string): HTMLSlotElement | null {
+        const selector = name ? `slot[name="${name}"]` : 'slot:not([name])';
+        return this.shadow.querySelector(selector);
+    }
+
+    /**
+     * 슬롯에 할당된 요소들 가져오기
+     */
+    public getSlotElements(name?: string): Element[] {
+        const slot = this.getSlot(name);
+        return slot ? slot.assignedElements() : [];
+    }
+
+    // === 정리 ===
+
+    /**
+     * 컴포넌트 정리
+     */
+    protected cleanup(): void {
+        // 이벤트 리스너 제거
+        this.eventListeners.forEach((handlers, eventType) => {
+            handlers.forEach(handler => {
+                this.removeEventListener(eventType, handler);
+            });
         });
+        this.eventListeners.clear();
+        
+        // Observer 정리
+        if (this.observer) {
+            this.observer.disconnect();
+            this.observer = null;
+        }
+        
+        // 템플릿 캐시 정리
+        this.compiledTemplate = null;
+    }
 
-        return tempDiv.innerHTML;
+    /**
+     * 컴포넌트 파괴
+     */
+    public destroy(): void {
+        this.cleanup();
+        this.remove();
     }
 }

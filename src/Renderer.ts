@@ -7,7 +7,7 @@
  * - Web Component 인스턴스를 관리하고, 상태 변경에 따른 자동 재렌더링을 처리합니다.
  * - customElements.define 대신 is 속성 기반 컴포넌트 활성화를 직접 처리합니다.
  * @author Aits Framework AI
- * @version 0.3.0
+ * @version 0.4.0
  */
 
 import type { Aits } from './Aits';
@@ -15,6 +15,7 @@ import type { Context } from './Context';
 import type { LoadingProgress } from './Loader';
 
 // 컴포넌트 import
+import { AitsElement } from './components/AitsElement';
 import { AitsList } from './components/AitsList';
 import { AitsArticle } from './components/AitsArticle';
 import { AitsForm } from './components/AitsForm';
@@ -50,9 +51,6 @@ export abstract class Transition {
     protected startTime: number = 0;
     protected actualDuration: number = 300;
     
-    /**
-     * 전환 시작
-     */
     public async execute(
         fromElement: HTMLElement | null,
         toElement: HTMLElement,
@@ -62,23 +60,14 @@ export abstract class Transition {
         this.startTime = performance.now();
         this.actualDuration = options.duration || this.minDuration;
         
-        // 전환 준비
         await this.prepare(fromElement, toElement, container, options);
-        
-        // 전환 실행
         await this.animate(fromElement, toElement, container, options);
-        
-        // 전환 정리
         await this.cleanup(fromElement, toElement, container);
     }
     
-    /**
-     * 로딩 진행률 업데이트
-     */
     public updateProgress(loadingProgress: number): void {
         this.progress = loadingProgress;
         
-        // 진행률에 따라 전환 속도 조절
         const elapsed = performance.now() - this.startTime;
         const expectedDuration = Math.min(
             Math.max(this.minDuration / loadingProgress, this.minDuration),
@@ -135,11 +124,9 @@ export class FadeTransition extends Transition {
             fromElement.style.opacity = '0';
         }
         
-        // 다음 프레임에서 페이드 인
         await new Promise(resolve => requestAnimationFrame(resolve));
         toElement.style.opacity = '1';
         
-        // 애니메이션 완료 대기
         await new Promise(resolve => setTimeout(resolve, this.actualDuration));
     }
     
@@ -242,7 +229,6 @@ type ComponentConstructor = new () => HTMLElement;
 // 렌더링된 뷰 정보
 interface RenderedView {
     element: HTMLElement;
-    controller?: string;
     template: string;
 }
 
@@ -261,8 +247,10 @@ export class Renderer {
     // 컴포넌트 레지스트리 (is 값 -> 클래스 매핑)
     private componentRegistry: Map<string, ComponentConstructor>;
     
-    // 활성화된 컴포넌트 추적
-    private activeComponents: WeakMap<HTMLElement, HTMLElement>;
+    // 활성화된 컴포넌트 추적 시스템
+    private componentInstances: WeakMap<HTMLElement, AitsElement>;  // DOM 요소 -> 컴포넌트 인스턴스
+    private componentsByType: Map<string, Set<HTMLElement>>;        // is 값 -> DOM 요소들
+    private allActiveComponents: Set<HTMLElement>;                  // 모든 활성 컴포넌트
     
     // 현재 실행 중인 전환 효과
     private activeTransition: Transition | null = null;
@@ -283,7 +271,9 @@ export class Renderer {
     public constructor(aitsInstance: Aits) {
         this.aits = aitsInstance;
         this.componentRegistry = new Map();
-        this.activeComponents = new WeakMap();
+        this.componentInstances = new WeakMap();
+        this.componentsByType = new Map();
+        this.allActiveComponents = new Set();
         this.stateBindings = new Map();
         
         // 레이아웃 컨테이너 초기화
@@ -295,10 +285,8 @@ export class Renderer {
     
     /**
      * 기본 컴포넌트를 등록합니다.
-     * customElements.define 대신 내부 레지스트리에 등록
      */
     private _registerDefaultComponents(): void {
-        // 각 컴포넌트 클래스를 is 값과 매핑
         this.componentRegistry.set('aits-list', AitsList as any);
         this.componentRegistry.set('aits-article', AitsArticle as any);
         this.componentRegistry.set('aits-form', AitsForm as any);
@@ -341,10 +329,8 @@ export class Renderer {
     
     /**
      * Fragment 내의 is 속성을 가진 요소들을 컴포넌트로 활성화합니다.
-     * customElements.define을 사용하지 않고 직접 프로토타입을 교체합니다.
      */
     private _activateComponents(fragment: DocumentFragment): void {
-        // is 속성을 가진 모든 요소 찾기
         const elementsWithIs = fragment.querySelectorAll('[is]');
         
         elementsWithIs.forEach(element => {
@@ -353,8 +339,6 @@ export class Renderer {
             
             if (isValue && this.componentRegistry.has(isValue)) {
                 const ComponentClass = this.componentRegistry.get(isValue)!;
-                
-                // 컴포넌트 인스턴스 생성
                 const componentInstance = new ComponentClass();
                 
                 // 기존 요소의 모든 속성을 컴포넌트 인스턴스로 복사
@@ -370,15 +354,161 @@ export class Renderer {
                 // DOM에서 기존 요소를 컴포넌트 인스턴스로 교체
                 htmlElement.parentNode?.replaceChild(componentInstance, htmlElement);
                 
-                // 활성화된 컴포넌트 추적
-                this.activeComponents.set(componentInstance, componentInstance);
+                // 컴포넌트 추적 시스템에 등록
+                this._registerComponent(componentInstance, isValue);
             }
         });
     }
     
     /**
+     * 컴포넌트를 추적 시스템에 등록합니다.
+     */
+    private _registerComponent(instance: HTMLElement, type: string): void {
+        // 타입별 그룹화
+        if (!this.componentsByType.has(type)) {
+            this.componentsByType.set(type, new Set());
+        }
+        this.componentsByType.get(type)!.add(instance);
+        
+        // 전체 컴포넌트 세트에 추가
+        this.allActiveComponents.add(instance);
+        
+        // 인스턴스 매핑 (AitsElement 타입인 경우만)
+        if (instance instanceof AitsElement) {
+            this.componentInstances.set(instance, instance);
+            // 컴포넌트에 활성화 상태 표시
+            (instance as any).__aitsActivated = true;
+        }
+    }
+    
+    /**
+     * 컴포넌트를 추적 시스템에서 제거합니다.
+     */
+    private _unregisterComponent(instance: HTMLElement): void {
+        // is 속성값 확인
+        const isValue = instance.getAttribute('is');
+        
+        if (isValue && this.componentsByType.has(isValue)) {
+            this.componentsByType.get(isValue)!.delete(instance);
+            
+            // 타입별 세트가 비어있으면 제거
+            if (this.componentsByType.get(isValue)!.size === 0) {
+                this.componentsByType.delete(isValue);
+            }
+        }
+        
+        // 전체 컴포넌트 세트에서 제거
+        this.allActiveComponents.delete(instance);
+    }
+    
+    // === 컴포넌트 검색 메서드 ===
+    
+    /**
+     * 단일 컴포넌트를 검색합니다.
+     */
+    public query<T extends HTMLElement = HTMLElement>(selector: string): T | null {
+        // 먼저 활성화된 컴포넌트 중에서 검색
+        for (const component of this.allActiveComponents) {
+            if (component.matches(selector)) {
+                return component as T;
+            }
+        }
+        
+        // 일반 DOM 요소 검색
+        const element = document.querySelector(selector);
+        return element as T | null;
+    }
+    
+    /**
+     * 모든 매칭 컴포넌트를 검색합니다.
+     */
+    public queryAll<T extends HTMLElement = HTMLElement>(selector: string): T[] {
+        const results: T[] = [];
+        
+        // 활성화된 컴포넌트 중에서 검색
+        for (const component of this.allActiveComponents) {
+            if (component.matches(selector)) {
+                results.push(component as T);
+            }
+        }
+        
+        // 일반 DOM 요소도 포함
+        const elements = document.querySelectorAll(selector);
+        elements.forEach(el => {
+            if (!this.allActiveComponents.has(el as HTMLElement)) {
+                results.push(el as T);
+            }
+        });
+        
+        return results;
+    }
+    
+    /**
+     * 특정 타입의 컴포넌트만 검색합니다.
+     */
+    public queryByType<T extends HTMLElement = HTMLElement>(componentType: string): T[] {
+        const components = this.componentsByType.get(componentType);
+        return components ? Array.from(components) as T[] : [];
+    }
+    
+    /**
+     * 컨테이너 내에서 컴포넌트를 검색합니다.
+     */
+    public queryIn<T extends HTMLElement = HTMLElement>(
+        container: HTMLElement | null, 
+        selector: string
+    ): T | null {
+        if (!container) return null;
+        
+        // 컨테이너 내의 활성화된 컴포넌트 검색
+        for (const component of this.allActiveComponents) {
+            if (container.contains(component) && component.matches(selector)) {
+                return component as T;
+            }
+        }
+        
+        // 일반 DOM 요소 검색
+        return container.querySelector(selector) as T | null;
+    }
+    
+    /**
+     * 컨테이너 내의 모든 매칭 컴포넌트를 검색합니다.
+     */
+    public queryAllIn<T extends HTMLElement = HTMLElement>(
+        container: HTMLElement | null, 
+        selector: string
+    ): T[] {
+        if (!container) return [];
+        
+        const results: T[] = [];
+        
+        // 컨테이너 내의 활성화된 컴포넌트 검색
+        for (const component of this.allActiveComponents) {
+            if (container.contains(component) && component.matches(selector)) {
+                results.push(component as T);
+            }
+        }
+        
+        // 일반 DOM 요소도 포함
+        const elements = container.querySelectorAll(selector);
+        elements.forEach(el => {
+            if (!this.allActiveComponents.has(el as HTMLElement)) {
+                results.push(el as T);
+            }
+        });
+        
+        return results;
+    }
+    
+    /**
+     * 컴포넌트가 활성화되었는지 확인합니다.
+     */
+    public isComponentActivated(element: HTMLElement): boolean {
+        return this.allActiveComponents.has(element) || (element as any).__aitsActivated === true;
+    }
+    
+    /**
      * 특정 요소와 그 하위 요소들의 is 속성을 활성화합니다.
-     * DOM에 이미 추가된 요소들을 대상으로 합니다.
      */
     public activateComponentsIn(container: HTMLElement): void {
         // 컨테이너 자체가 is 속성을 가지고 있는지 확인
@@ -400,7 +530,7 @@ export class Renderer {
                 
                 // 교체
                 container.parentNode?.replaceChild(componentInstance, container);
-                this.activeComponents.set(componentInstance, componentInstance);
+                this._registerComponent(componentInstance, isValue);
                 
                 // 교체된 요소를 새로운 컨테이너로 설정
                 container = componentInstance;
@@ -429,21 +559,15 @@ export class Renderer {
                 
                 // 교체
                 htmlElement.parentNode?.replaceChild(componentInstance, htmlElement);
-                this.activeComponents.set(componentInstance, componentInstance);
+                this._registerComponent(componentInstance, isValue);
             }
         });
     }
     
-    /**
-     * 컴포넌트가 활성화되었는지 확인합니다.
-     */
-    public isComponentActivated(element: HTMLElement): boolean {
-        return this.activeComponents.has(element);
-    }
+    // === 레이아웃 관리 ===
     
     /**
      * 레이아웃을 구성하고 뷰를 렌더링합니다.
-     * Context와 Scenario의 지시에 따라 자동으로 처리됩니다.
      */
     public async renderLayout(
         config: LayoutConfig,
@@ -480,98 +604,14 @@ export class Renderer {
     }
     
     /**
-     * 특정 뷰를 상태 변경에 따라 재렌더링합니다.
-     */
-    public async rerender(
-        element: HTMLElement,
-        template: string,
-        newState: any
-    ): Promise<void> {
-        // 템플릿과 새 상태를 결합
-        const html = this._interpolateTemplate(template, newState);
-        
-        // 새 요소 생성
-        const newElement = this.render(html);
-        
-        // 기존 요소의 속성 복사
-        Array.from(element.attributes).forEach(attr => {
-            if (attr.name !== 'id') {  // ID는 중복 방지
-                newElement.setAttribute(attr.name, attr.value);
-            }
-        });
-        
-        // DOM에서 교체
-        element.parentNode?.replaceChild(newElement, element);
-        
-        // 바인딩 정보 업데이트
-        this._updateBindings(element, newElement);
-    }
-    
-    /**
-     * 상태 키와 뷰를 바인딩합니다.
-     * Context가 state 변경을 감지하면 이 메서드를 통해 등록된 뷰를 재렌더링합니다.
-     */
-    public bindStateToView(stateKey: string, view: RenderedView): void {
-        if (!this.stateBindings.has(stateKey)) {
-            this.stateBindings.set(stateKey, new Set());
-        }
-        this.stateBindings.get(stateKey)!.add({
-            view,
-            template: view.template
-        });
-    }
-    
-    /**
-     * 상태 변경 시 바인딩된 뷰들을 재렌더링합니다.
-     * Context에서 호출됩니다.
-     */
-    public async updateBoundViews(stateKey: string, newValue: any, context: Context): Promise<void> {
-        const bindings = this.stateBindings.get(stateKey);
-        if (!bindings) return;
-        
-        for (const binding of bindings) {
-            // 뷰가 아직 DOM에 있는지 확인
-            if (document.body.contains(binding.view.element)) {
-                await this.rerender(
-                    binding.view.element,
-                    binding.template,
-                    { [stateKey]: newValue, ...context.state }
-                );
-            } else {
-                // DOM에서 제거된 뷰는 바인딩에서도 제거
-                bindings.delete(binding);
-            }
-        }
-    }
-    
-    /**
-     * 로딩 진행률을 전환 효과에 전달합니다.
-     */
-    public updateLoadingProgress(progress: LoadingProgress): void {
-        if (this.activeTransition) {
-            this.activeTransition.updateProgress(progress.progress);
-        }
-    }
-    
-    /**
-     * 특정 셀렉터로 관리 중인 컴포넌트를 찾습니다.
-     */
-    public queryComponent<T extends HTMLElement>(selector: string): T | undefined {
-        const element = document.querySelector(selector) as HTMLElement | null;
-        if (!element) return undefined;
-        
-        // 활성화된 컴포넌트인지 확인
-        if (this.activeComponents.has(element)) {
-            return element as T;
-        }
-        
-        return undefined;
-    }
-    
-    /**
      * 현재 레이아웃을 정리합니다.
      */
     public clearLayout(): void {
+        // 모든 활성 컴포넌트 제거
+        this.allActiveComponents.forEach(component => {
+            this._unregisterComponent(component);
+        });
+        
         // 모든 섹션의 요소 제거
         Object.entries(this.currentLayout).forEach(([key, view]) => {
             if (view) {
@@ -592,22 +632,23 @@ export class Renderer {
     public clearSection(section: keyof typeof this.currentLayout): void {
         const view = this.currentLayout[section];
         if (view) {
+            // 섹션 내의 컴포넌트들 제거
+            const componentsToRemove: HTMLElement[] = [];
+            this.allActiveComponents.forEach(component => {
+                if (view.element.contains(component)) {
+                    componentsToRemove.push(component);
+                }
+            });
+            
+            componentsToRemove.forEach(component => {
+                this._unregisterComponent(component);
+            });
+            
             view.element.remove();
             delete this.currentLayout[section];
             
             // 해당 섹션의 바인딩 제거
             this._removeViewBindings(view);
-        }
-    }
-    
-    /**
-     * 모달을 닫습니다.
-     */
-    public closeModal(): void {
-        if (this.containers.modal && this.currentLayout.modal) {
-            this.containers.modal.classList.remove('active');
-            this.currentLayout.modal.element.remove();
-            delete this.currentLayout.modal;
         }
     }
     
@@ -617,7 +658,6 @@ export class Renderer {
      * 레이아웃 컨테이너를 초기화합니다.
      */
     private _initializeContainers(): typeof this.containers {
-        // 루트 컨테이너 찾기 또는 생성
         let root = document.getElementById('aits-root');
         if (!root) {
             root = document.createElement('div');
@@ -626,7 +666,6 @@ export class Renderer {
             document.body.appendChild(root);
         }
         
-        // 메인 컨테이너 생성
         let main = root.querySelector<HTMLElement>('[data-aits-main]');
         if (!main) {
             main = document.createElement('main');
@@ -648,16 +687,10 @@ export class Renderer {
         templatePath: string,
         context: Context
     ): Promise<void> {
-        // HTML 로드
         const html = await this.aits.html(templatePath);
-        
-        // 템플릿과 상태 결합
         const interpolated = this._interpolateTemplate(html, context.state);
-        
-        // DOM 생성
         const element = this.render(interpolated);
         
-        // 컨테이너 찾기 또는 생성
         if (!this.containers[section]) {
             const container = document.createElement(section);
             container.dataset[`aits${section.charAt(0).toUpperCase() + section.slice(1)}`] = 'true';
@@ -673,15 +706,12 @@ export class Renderer {
             this.containers[section] = container;
         }
         
-        // 기존 콘텐츠 제거
         if (this.currentLayout[section]) {
             this.currentLayout[section]!.element.remove();
         }
         
-        // 새 콘텐츠 추가
         this.containers[section]!.appendChild(element);
         
-        // 레이아웃 정보 저장
         this.currentLayout[section] = {
             element,
             template: html
@@ -689,18 +719,16 @@ export class Renderer {
     }
     
     /**
-     * 메인 콘텐츠를 렌더링합니다. (전환 효과 포함)
+     * 메인 콘텐츠를 렌더링합니다.
      */
     private async _renderMainContent(
         viewPaths: string[],
         context: Context,
         options?: TransitionOptions
     ): Promise<void> {
-        // 다중 뷰를 위한 컨테이너 생성
         const container = document.createElement('div');
         container.className = 'aits-main-content';
         
-        // 각 뷰 로드 및 렌더링
         const loadPromises = viewPaths.map(async (path) => {
             const html = await this.aits.html(path, {
                 onProgress: (progress) => this.updateLoadingProgress(progress)
@@ -712,7 +740,6 @@ export class Renderer {
         const elements = await Promise.all(loadPromises);
         elements.forEach(el => container.appendChild(el));
         
-        // 전환 효과 실행
         const oldMain = this.currentLayout.main?.element || null;
         
         if (this.activeTransition) {
@@ -723,12 +750,10 @@ export class Renderer {
                 options
             );
         } else {
-            // 전환 효과 없이 즉시 교체
             if (oldMain) oldMain.remove();
             this.containers.main.appendChild(container);
         }
         
-        // 레이아웃 정보 업데이트
         this.currentLayout.main = {
             element: container,
             template: viewPaths.join(',')
@@ -742,7 +767,6 @@ export class Renderer {
         modalPath: string,
         context: Context
     ): Promise<void> {
-        // 모달 컨테이너 찾기 또는 생성
         if (!this.containers.modal) {
             const modalContainer = document.createElement('div');
             modalContainer.id = 'aits-modal';
@@ -752,32 +776,103 @@ export class Renderer {
             this.containers.modal = modalContainer;
         }
         
-        // HTML 로드 및 렌더링
         const html = await this.aits.html(modalPath);
         const interpolated = this._interpolateTemplate(html, context.state);
         const element = this.render(interpolated);
         
-        // 기존 모달 제거
         if (this.currentLayout.modal) {
             this.currentLayout.modal.element.remove();
         }
         
-        // 새 모달 추가
         this.containers.modal.appendChild(element);
         this.containers.modal.classList.add('active');
         
-        // 레이아웃 정보 저장
         this.currentLayout.modal = {
             element,
             template: html
         };
         
-        // 백드롭 클릭 시 모달 닫기
         this.containers.modal.addEventListener('click', (e) => {
             if (e.target === this.containers.modal) {
                 this.closeModal();
             }
         }, { once: true });
+    }
+    
+    /**
+     * 모달을 닫습니다.
+     */
+    public closeModal(): void {
+        if (this.containers.modal && this.currentLayout.modal) {
+            this.containers.modal.classList.remove('active');
+            this.currentLayout.modal.element.remove();
+            delete this.currentLayout.modal;
+        }
+    }
+    
+    /**
+     * 로딩 진행률을 전환 효과에 전달합니다.
+     */
+    public updateLoadingProgress(progress: LoadingProgress): void {
+        if (this.activeTransition) {
+            this.activeTransition.updateProgress(progress.progress);
+        }
+    }
+    
+    // === 상태 바인딩 관련 ===
+    
+    /**
+     * 상태 키와 뷰를 바인딩합니다.
+     */
+    public bindStateToView(stateKey: string, view: RenderedView): void {
+        if (!this.stateBindings.has(stateKey)) {
+            this.stateBindings.set(stateKey, new Set());
+        }
+        this.stateBindings.get(stateKey)!.add({
+            view,
+            template: view.template
+        });
+    }
+    
+    /**
+     * 상태 변경 시 바인딩된 뷰들을 재렌더링합니다.
+     */
+    public async updateBoundViews(stateKey: string, newValue: any, context: Context): Promise<void> {
+        const bindings = this.stateBindings.get(stateKey);
+        if (!bindings) return;
+        
+        for (const binding of bindings) {
+            if (document.body.contains(binding.view.element)) {
+                await this.rerender(
+                    binding.view.element,
+                    binding.template,
+                    { [stateKey]: newValue, ...context.state }
+                );
+            } else {
+                bindings.delete(binding);
+            }
+        }
+    }
+    
+    /**
+     * 특정 뷰를 상태 변경에 따라 재렌더링합니다.
+     */
+    public async rerender(
+        element: HTMLElement,
+        template: string,
+        newState: any
+    ): Promise<void> {
+        const html = this._interpolateTemplate(template, newState);
+        const newElement = this.render(html);
+        
+        Array.from(element.attributes).forEach(attr => {
+            if (attr.name !== 'id') {
+                newElement.setAttribute(attr.name, attr.value);
+            }
+        });
+        
+        element.parentNode?.replaceChild(newElement, element);
+        this._updateBindings(element, newElement);
     }
     
     /**
@@ -798,7 +893,6 @@ export class Renderer {
      * 바인딩 정보를 업데이트합니다.
      */
     private _updateBindings(oldElement: HTMLElement, newElement: HTMLElement): void {
-        // 기존 요소와 관련된 모든 바인딩을 새 요소로 업데이트
         this.stateBindings.forEach(bindings => {
             bindings.forEach(binding => {
                 if (binding.view.element === oldElement) {

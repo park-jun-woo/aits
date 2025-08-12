@@ -334,6 +334,85 @@ export class Context {
     public get renderer(): Renderer {
         return this.aits.getRenderer();
     }
+    
+    // === 컴포넌트 검색 메서드 ===
+    
+    /**
+     * 단일 컴포넌트를 검색합니다.
+     * @param selector - CSS 선택자
+     * @returns 매칭된 컴포넌트 또는 null
+     * @example
+     * const list = ctx.query<AitsList>('#user-list');
+     * const form = ctx.query<AitsForm>('[is="aits-form"]');
+     */
+    public query<T extends HTMLElement = HTMLElement>(selector: string): T | null {
+        return this.renderer.query<T>(selector);
+    }
+    
+    /**
+     * 모든 매칭 컴포넌트를 검색합니다.
+     * @param selector - CSS 선택자
+     * @returns 매칭된 컴포넌트 배열
+     * @example
+     * const forms = ctx.queryAll<AitsForm>('[is="aits-form"]');
+     * const buttons = ctx.queryAll<HTMLButtonElement>('button.primary');
+     */
+    public queryAll<T extends HTMLElement = HTMLElement>(selector: string): T[] {
+        return this.renderer.queryAll<T>(selector);
+    }
+    
+    /**
+     * 특정 타입의 컴포넌트만 검색합니다.
+     * @param componentType - 컴포넌트 타입 (is 속성값)
+     * @returns 해당 타입의 컴포넌트 배열
+     * @example
+     * const lists = ctx.queryByType<AitsList>('aits-list');
+     * const forms = ctx.queryByType<AitsForm>('aits-form');
+     */
+    public queryByType<T extends HTMLElement = HTMLElement>(componentType: string): T[] {
+        return this.renderer.queryByType<T>(componentType);
+    }
+    
+    /**
+     * 컨테이너 내에서 컴포넌트를 검색합니다.
+     * @param container - 검색할 컨테이너 요소
+     * @param selector - CSS 선택자
+     * @returns 매칭된 컴포넌트 또는 null
+     * @example
+     * const sidebar = ctx.query('#sidebar');
+     * const nav = ctx.queryIn<AitsNav>(sidebar, '[is="aits-nav"]');
+     */
+    public queryIn<T extends HTMLElement = HTMLElement>(
+        container: HTMLElement | null, 
+        selector: string
+    ): T | null {
+        return this.renderer.queryIn<T>(container, selector);
+    }
+    
+    /**
+     * 컨테이너 내의 모든 매칭 컴포넌트를 검색합니다.
+     * @param container - 검색할 컨테이너 요소
+     * @param selector - CSS 선택자
+     * @returns 매칭된 컴포넌트 배열
+     * @example
+     * const main = ctx.query('main');
+     * const cards = ctx.queryAllIn<AitsCard>(main, '[is="aits-card"]');
+     */
+    public queryAllIn<T extends HTMLElement = HTMLElement>(
+        container: HTMLElement | null, 
+        selector: string
+    ): T[] {
+        return this.renderer.queryAllIn<T>(container, selector);
+    }
+    
+    /**
+     * 컴포넌트가 활성화되었는지 확인합니다.
+     * @param element - 확인할 요소
+     * @returns 활성화 여부
+     */
+    public isComponentActivated(element: HTMLElement): boolean {
+        return this.renderer.isComponentActivated(element);
+    }
 
     // === Navigation 메서드 ===
     
