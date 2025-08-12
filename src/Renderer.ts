@@ -1,11 +1,12 @@
 /**
  * =================================================================
- * Renderer.ts - 지능적인 뷰 및 레이아웃 관리자 (개선된 버전)
+ * Renderer.ts - 지능적인 뷰 및 레이아웃 관리자 (Bridge 통합 버전)
  * =================================================================
  * @description
  * - 메모리 누수 방지와 컴포넌트 중복 등록 체크가 강화된 렌더러
+ * - Bridge 시스템과 통합하여 외부 웹 컴포넌트도 자동 처리
  * @author Aits Framework AI
- * @version 1.1.0
+ * @version 1.2.0
  */
 
 import type { Aits } from './Aits';
@@ -18,6 +19,9 @@ import {
     ComponentUtils,
     AitsElement 
 } from './components';
+
+// Bridge 시스템 import
+import { BridgeRegistry, BridgeUtils } from './Bridge';
 
 // 레이아웃 구성을 정의하는 인터페이스
 export interface LayoutConfig {
@@ -223,9 +227,10 @@ interface RenderedView {
 
 // 컴포넌트 등록 정보
 interface ComponentRegistration {
-    component: AitsElement;
+    component: AitsElement | HTMLElement;  // 외부 웹 컴포넌트도 포함
     type: string;
     registeredAt: number;
+    isExternal?: boolean;  // 외부 웹 컴포넌트 여부
 }
 
 export class Renderer {
@@ -241,9 +246,9 @@ export class Renderer {
     } = {};
     
     // 활성화된 컴포넌트 추적 (중복 체크 강화)
-    private activeComponents: Map<AitsElement, ComponentRegistration> = new Map();
-    private componentsByType: Map<string, Set<AitsElement>> = new Map();
-    private componentsByElement: WeakMap<HTMLElement, AitsElement> = new WeakMap();
+    private activeComponents: Map<AitsElement | HTMLElement, ComponentRegistration> = new Map();
+    private componentsByType: Map<string, Set<AitsElement | HTMLElement>> = new Map();
+    private componentsByElement: WeakMap<HTMLElement, AitsElement | HTMLElement> = new WeakMap();
     
     // 현재 실행 중인 전환 효과
     private activeTransition: Transition | null = null;
@@ -260,6 +265,9 @@ export class Renderer {
     
     // 메모리 정리 인터벌
     private cleanupInterval: number | null = null;
+    
+    // Bridge 자동 변환 활성화 여부
+    private bridgeAutoTransform: boolean = true;
 
     public constructor(aitsInstance: Aits) {
         this.aits = aitsInstance;
@@ -267,8 +275,37 @@ export class Renderer {
         // 레이아웃 컨테이너 초기화
         this.containers = this._initializeContainers();
         
+        // Bridge 자동 변환 시작
+        if (this.bridgeAutoTransform) {
+            this._initializeBridges();
+        }
+        
         // 주기적인 메모리 정리 시작
         this._startPeriodicCleanup();
+    }
+    
+    /**
+     * Bridge 시스템 초기화
+     */
+    private _initializeBridges(): void {
+        // DOM이 준비되면 자동 변환 시작
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', () => {
+                BridgeUtils.startAutoTransform();
+            });
+        } else {
+            BridgeUtils.startAutoTransform();
+        }
+    }
+    
+    /**
+     * Bridge 자동 변환 활성화/비활성화
+     */
+    public setBridgeAutoTransform(enabled: boolean): void {
+        this.bridgeAutoTransform = enabled;
+        if (enabled) {
+            this._initializeBridges();
+        }
     }
     
     /**
@@ -295,56 +332,73 @@ export class Renderer {
     /**
      * Fragment 내의 is 속성을 가진 요소들을 컴포넌트로 활성화
      */
-    private _activateComponents(fragment: DocumentFragment): void {
+    private async _activateComponents(fragment: DocumentFragment): Promise<void> {
         const elementsWithIs = fragment.querySelectorAll('[is]');
         
-        elementsWithIs.forEach(element => {
+        for (const element of Array.from(elementsWithIs)) {
             const htmlElement = element as HTMLElement;
             const isValue = htmlElement.getAttribute('is');
             
-            if (!isValue) return;
+            if (!isValue) continue;
             
             // 이미 활성화된 컴포넌트인지 체크
             if (this.componentsByElement.has(htmlElement)) {
                 console.warn(`[Renderer] Element already activated as component: ${isValue}`);
-                return;
+                continue;
             }
             
-            // 시맨틱 태그 검증
-            if (!ComponentUtils.isValidSemanticTag(isValue, htmlElement.tagName)) {
-                console.warn(`[Renderer] Invalid semantic tag <${htmlElement.tagName.toLowerCase()}> for component ${isValue}`);
-                return;
+            // 1. 먼저 외부 웹 컴포넌트인지 확인 (Bridge 시스템)
+            const bridge = BridgeRegistry.findBridge(isValue);
+            if (bridge) {
+                const webComponent = await bridge.transform(htmlElement);
+                if (webComponent) {
+                    this._registerComponent(webComponent, isValue, true);
+                    continue;
+                }
             }
             
-            // 컴포넌트 생성
-            const component = ComponentUtils.createComponent(isValue);
-            if (!component) {
-                console.warn(`[Renderer] Unknown component type: ${isValue}`);
-                return;
+            // 2. AITS 내장 컴포넌트 처리
+            if (isValue.startsWith('aits-')) {
+                // 시맨틱 태그 검증
+                if (!ComponentUtils.isValidSemanticTag(isValue, htmlElement.tagName)) {
+                    console.warn(`[Renderer] Invalid semantic tag <${htmlElement.tagName.toLowerCase()}> for component ${isValue}`);
+                    continue;
+                }
+                
+                // 컴포넌트 생성
+                const component = ComponentUtils.createComponent(isValue);
+                if (!component) {
+                    console.warn(`[Renderer] Unknown component type: ${isValue}`);
+                    continue;
+                }
+                
+                // 속성 복사
+                Array.from(htmlElement.attributes).forEach(attr => {
+                    component.setAttribute(attr.name, attr.value);
+                });
+                
+                // 자식 노드 이동
+                while (htmlElement.firstChild) {
+                    component.appendChild(htmlElement.firstChild);
+                }
+                
+                // DOM에서 교체
+                htmlElement.parentNode?.replaceChild(component, htmlElement);
+                
+                // 컴포넌트 추적
+                this._registerComponent(component, isValue, false);
             }
-            
-            // 속성 복사
-            Array.from(htmlElement.attributes).forEach(attr => {
-                component.setAttribute(attr.name, attr.value);
-            });
-            
-            // 자식 노드 이동
-            while (htmlElement.firstChild) {
-                component.appendChild(htmlElement.firstChild);
-            }
-            
-            // DOM에서 교체
-            htmlElement.parentNode?.replaceChild(component, htmlElement);
-            
-            // 컴포넌트 추적
-            this._registerComponent(component, isValue);
-        });
+        }
     }
     
     /**
      * 컴포넌트를 추적 시스템에 등록 (중복 체크 강화)
      */
-    private _registerComponent(component: AitsElement, type: string): void {
+    private _registerComponent(
+        component: AitsElement | HTMLElement, 
+        type: string,
+        isExternal: boolean = false
+    ): void {
         // 이미 등록되었는지 확인
         if (this.activeComponents.has(component)) {
             console.warn(`[Renderer] Component already registered: ${type}`);
@@ -355,7 +409,8 @@ export class Renderer {
         const registration: ComponentRegistration = {
             component,
             type,
-            registeredAt: Date.now()
+            registeredAt: Date.now(),
+            isExternal
         };
         
         // 활성 컴포넌트 맵에 추가
@@ -368,17 +423,18 @@ export class Renderer {
         this.componentsByType.get(type)!.add(component);
         
         // 약한 참조로 요소 매핑
-        this.componentsByElement.set(component, component);
+        this.componentsByElement.set(component as HTMLElement, component);
         
         // 컴포넌트에 활성화 상태 표시
         (component as any).__aitsActivated = true;
         (component as any).__aitsRegisteredAt = registration.registeredAt;
+        (component as any).__aitsIsExternal = isExternal;
     }
     
     /**
      * 컴포넌트를 추적 시스템에서 제거
      */
-    private _unregisterComponent(component: AitsElement): void {
+    private _unregisterComponent(component: AitsElement | HTMLElement): void {
         const registration = this.activeComponents.get(component);
         if (!registration) return;
         
@@ -402,36 +458,64 @@ export class Renderer {
         // 활성화 상태 제거
         delete (component as any).__aitsActivated;
         delete (component as any).__aitsRegisteredAt;
+        delete (component as any).__aitsIsExternal;
     }
     
     /**
      * 특정 컨테이너 내의 컴포넌트들을 활성화
      */
-    public activateComponentsIn(container: HTMLElement): void {
+    public async activateComponentsIn(container: HTMLElement): Promise<void> {
         // 컨테이너 자체 처리
         if (container.hasAttribute('is')) {
-            // 이미 활성화되었는지 확인
-            if (!this.componentsByElement.has(container)) {
-                const enhanced = ComponentUtils.enhanceElement(container);
-                if (enhanced) {
-                    this._registerComponent(enhanced, enhanced.getAttribute('is')!);
+            const isValue = container.getAttribute('is');
+            if (isValue && !this.componentsByElement.has(container)) {
+                // 외부 웹 컴포넌트 확인
+                const bridge = BridgeRegistry.findBridge(isValue);
+                if (bridge) {
+                    const webComponent = await bridge.transform(container);
+                    if (webComponent) {
+                        this._registerComponent(webComponent, isValue, true);
+                    }
+                } 
+                // AITS 컴포넌트 처리
+                else if (isValue.startsWith('aits-')) {
+                    const enhanced = ComponentUtils.enhanceElement(container);
+                    if (enhanced) {
+                        this._registerComponent(enhanced, isValue, false);
+                    }
                 }
             }
         }
         
         // 하위 요소들 처리
         const elementsWithIs = container.querySelectorAll('[is]');
-        elementsWithIs.forEach(element => {
+        for (const element of Array.from(elementsWithIs)) {
             const htmlElement = element as HTMLElement;
+            const isValue = htmlElement.getAttribute('is');
             
-            // 이미 활성화되었는지 확인
-            if (!this.componentsByElement.has(htmlElement)) {
-                const enhanced = ComponentUtils.enhanceElement(htmlElement);
-                if (enhanced) {
-                    this._registerComponent(enhanced, enhanced.getAttribute('is')!);
+            if (!isValue || this.componentsByElement.has(htmlElement)) continue;
+            
+            // 외부 웹 컴포넌트 확인
+            const bridge = BridgeRegistry.findBridge(isValue);
+            if (bridge) {
+                const webComponent = await bridge.transform(htmlElement);
+                if (webComponent) {
+                    this._registerComponent(webComponent, isValue, true);
                 }
             }
-        });
+            // AITS 컴포넌트 처리
+            else if (isValue.startsWith('aits-')) {
+                const enhanced = ComponentUtils.enhanceElement(htmlElement);
+                if (enhanced) {
+                    this._registerComponent(enhanced, isValue, false);
+                }
+            }
+        }
+        
+        // Bridge 시스템에도 변환 요청
+        if (this.bridgeAutoTransform) {
+            await BridgeUtils.transformAll(container);
+        }
     }
     
     // === 컴포넌트 검색 메서드 ===
@@ -442,7 +526,7 @@ export class Renderer {
     public query<T extends HTMLElement = HTMLElement>(selector: string): T | null {
         // 활성화된 컴포넌트 중에서 검색
         for (const [component] of this.activeComponents) {
-            if (component.matches(selector)) {
+            if ((component as HTMLElement).matches(selector)) {
                 return component as unknown as T;
             }
         }
@@ -460,9 +544,9 @@ export class Renderer {
         
         // 활성화된 컴포넌트 중에서 검색
         for (const [component] of this.activeComponents) {
-            if (component.matches(selector)) {
+            if ((component as HTMLElement).matches(selector)) {
                 results.push(component as unknown as T);
-                seen.add(component);
+                seen.add(component as Element);
             }
         }
         
@@ -482,7 +566,7 @@ export class Renderer {
      * @param componentType - 컴포넌트 타입 (is 속성값)
      * @returns 해당 타입의 컴포넌트 배열
      */
-    public queryByType(componentType: string): AitsElement[] {
+    public queryByType(componentType: string): (AitsElement | HTMLElement)[] {
         const components = this.componentsByType.get(componentType);
         return components ? Array.from(components) : [];
     }
@@ -492,7 +576,7 @@ export class Renderer {
      * @param componentType - 컴포넌트 타입 (is 속성값)
      * @returns 타입 캐스팅된 컴포넌트 배열
      */
-    public queryByTypeAs<T extends AitsElement>(componentType: string): T[] {
+    public queryByTypeAs<T extends AitsElement | HTMLElement>(componentType: string): T[] {
         const components = this.componentsByType.get(componentType);
         return components ? Array.from(components) as T[] : [];
     }
@@ -508,7 +592,7 @@ export class Renderer {
         
         // 컨테이너 내의 활성화된 컴포넌트 검색
         for (const [component] of this.activeComponents) {
-            if (container.contains(component) && component.matches(selector)) {
+            if (container.contains(component as Node) && (component as HTMLElement).matches(selector)) {
                 return component as unknown as T;
             }
         }
@@ -531,9 +615,9 @@ export class Renderer {
         
         // 컨테이너 내의 활성화된 컴포넌트 검색
         for (const [component] of this.activeComponents) {
-            if (container.contains(component) && component.matches(selector)) {
+            if (container.contains(component as Node) && (component as HTMLElement).matches(selector)) {
                 results.push(component as unknown as T);
-                seen.add(component);
+                seen.add(component as Element);
             }
         }
         
@@ -554,6 +638,13 @@ export class Renderer {
     public isComponentActivated(element: HTMLElement): boolean {
         return this.componentsByElement.has(element) ||
                (element as any).__aitsActivated === true;
+    }
+    
+    /**
+     * 컴포넌트가 외부 웹 컴포넌트인지 확인
+     */
+    public isExternalComponent(element: HTMLElement): boolean {
+        return (element as any).__aitsIsExternal === true;
     }
     
     // === 레이아웃 관리 ===
@@ -604,7 +695,10 @@ export class Renderer {
         
         componentsToRemove.forEach(component => {
             try {
-                component.destroy();
+                // AITS 컴포넌트인 경우 destroy 호출
+                if (!this.isExternalComponent(component as HTMLElement) && 'destroy' in component) {
+                    (component as AitsElement).destroy();
+                }
             } catch (error) {
                 console.error('[Renderer] Error destroying component:', error);
             }
@@ -641,17 +735,20 @@ export class Renderer {
         const view = this.currentLayout[section];
         if (view) {
             // 섹션 내의 컴포넌트들 제거
-            const componentsToRemove: AitsElement[] = [];
+            const componentsToRemove: (AitsElement | HTMLElement)[] = [];
             
             this.activeComponents.forEach((registration, component) => {
-                if (view.element.contains(component)) {
+                if (view.element.contains(component as Node)) {
                     componentsToRemove.push(component);
                 }
             });
             
             componentsToRemove.forEach(component => {
                 try {
-                    component.destroy();
+                    // AITS 컴포넌트인 경우 destroy 호출
+                    if (!this.isExternalComponent(component as HTMLElement) && 'destroy' in component) {
+                        (component as AitsElement).destroy();
+                    }
                 } catch (error) {
                     console.error('[Renderer] Error destroying component:', error);
                 }
@@ -719,6 +816,9 @@ export class Renderer {
         
         this.containers[section]!.appendChild(element);
         
+        // 컴포넌트 활성화 (Bridge 포함)
+        await this.activateComponentsIn(element);
+        
         this.currentLayout[section] = {
             element,
             template: templatePath
@@ -745,7 +845,12 @@ export class Renderer {
         });
         
         const elements = await Promise.all(loadPromises);
-        elements.forEach(el => container.appendChild(el));
+        
+        // 각 요소를 컨테이너에 추가하고 컴포넌트 활성화
+        for (const el of elements) {
+            container.appendChild(el);
+            await this.activateComponentsIn(el);
+        }
         
         const oldMain = this.currentLayout.main?.element || null;
         
@@ -778,10 +883,15 @@ export class Renderer {
         const html = await this.aits.html(modalPath);
         const element = this.render(html);
         
-        // 모달 컴포넌트 찾기
-        const modal = element.querySelector('[is="aits-modal"]') as AitsElement;
+        // 컴포넌트 활성화
+        await this.activateComponentsIn(element);
+        
+        // 모달 컴포넌트 찾기 (AITS 또는 외부)
+        const modal = element.querySelector('[is="aits-modal"], [is^="sl-dialog"], [is^="md-dialog"]') as any;
         if (modal && 'open' in modal) {
-            (modal as any).open();
+            modal.open();
+        } else if (modal && 'show' in modal) {
+            modal.show();
         }
         
         document.body.appendChild(element);
@@ -805,10 +915,10 @@ export class Renderer {
      * DOM에서 제거된 컴포넌트들 정리
      */
     private _cleanupStaleComponents(): void {
-        const staleComponents: AitsElement[] = [];
+        const staleComponents: (AitsElement | HTMLElement)[] = [];
         
         this.activeComponents.forEach((registration, component) => {
-            if (!document.body.contains(component)) {
+            if (!document.body.contains(component as Node)) {
                 staleComponents.push(component);
             }
         });
@@ -847,5 +957,32 @@ export class Renderer {
         
         // 컨테이너 제거
         this.containers.root?.remove();
+        
+        // Bridge 정리
+        BridgeRegistry.getAll().forEach(bridge => bridge.destroy());
+    }
+    
+    // === Bridge 관련 메서드 ===
+    
+    /**
+     * 특정 Bridge 등록
+     */
+    public registerBridge(bridge: any): void {
+        // Bridge는 생성자에서 자동 등록되므로, 인스턴스만 생성하면 됨
+        console.log(`[Renderer] Bridge registered`);
+    }
+    
+    /**
+     * 모든 등록된 Bridge 가져오기
+     */
+    public getBridges(): any[] {
+        return BridgeRegistry.getAll();
+    }
+    
+    /**
+     * 특정 요소를 수동으로 변환
+     */
+    public async transformElement(element: HTMLElement): Promise<HTMLElement | null> {
+        return BridgeUtils.transformElement(element);
     }
 }
