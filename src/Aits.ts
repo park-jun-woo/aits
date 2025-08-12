@@ -1,13 +1,12 @@
 /**
  * =================================================================
- * Aits.ts - Aits 프레임워크의 중앙 관제 센터
+ * Aits.ts - Aits 프레임워크의 중앙 관제 센터 (개선된 버전)
  * =================================================================
  * @description
  * - 프레임워크의 전체 생명주기, 라우팅, 컨트롤러 관리를 담당합니다.
- * - AI가 애플리케이션의 구조를 쉽게 파악하고 제어할 수 있도록,
- * 명확하고 예측 가능한 패턴을 제공하는 것을 목표로 합니다.
+ * - 메모리 관리, 에러 처리, 라우터 초기화가 개선되었습니다.
  * @author Aits Framework AI
- * @version 0.2.0
+ * @version 0.3.0
  */
 
 import Navigo from 'navigo';
@@ -48,9 +47,10 @@ export class Aits {
     // 프레임워크 상태
     private isRunning: boolean;
     private routeDefinitions: RouteDefinition[];
+    private isRouterInitialized: boolean = false;  // 라우터 초기화 상태
 
     public constructor() {
-        this.navigator = new Navigo('/');
+        // 기본 초기화
         this.loader = new Loader(this);
         this.renderer = new Renderer(this);
         this.apiAdapter = new DefaultApiAdapter();
@@ -61,46 +61,168 @@ export class Aits {
         this.isRunning = false;
         this.routeDefinitions = [];
 
-        // 404 핸들러 정의
+        // Navigator 초기화 (라우트 설정 전)
+        this.navigator = new Navigo('/');
+        
+        // 브라우저 뒤로가기/앞으로가기 처리 (훅만 설정)
+        this.navigator.hooks({
+            before: (done) => {
+                // 라우트 변경 전 처리
+                this.beforeRouteChange()
+                    .then(() => done())
+                    .catch((err) => {
+                        console.error('[Aits] Route change cancelled:', err);
+                        // 라우트 변경 취소
+                    });
+            },
+            after: () => {
+                // 라우트 변경 후 처리
+                this.afterRouteChange();
+            }
+        });
+        
+        // 글로벌 에러 핸들러 설정
+        this.setupGlobalErrorHandler();
+    }
+    
+    /**
+     * 라우터 초기화 완료 (모든 라우트 설정 후 호출)
+     */
+    private initializeRouter(): void {
+        if (this.isRouterInitialized) return;
+        
+        // 404 핸들러 정의 (라우트 설정 후)
         this.navigator.notFound(() => {
             this.handle404();
         });
         
-        // 브라우저 뒤로가기/앞으로가기 처리
-        this.navigator.hooks({
-            before: (done) => {
-                // 라우트 변경 전 처리
-                done();
-            },
-            after: () => {
-                // 라우트 변경 후 처리
-                this.updatePageLinks();
+        this.isRouterInitialized = true;
+    }
+    
+    /**
+     * 라우트 변경 전 처리
+     */
+    private async beforeRouteChange(): Promise<void> {
+        // 현재 컨트롤러의 canLeave 체크
+        if (this.activeController) {
+            const controller = this.activeController as any;
+            if (typeof controller.canLeave === 'function') {
+                const canLeave = await controller.canLeave(new Context(this));
+                if (!canLeave) {
+                    // 라우트 변경 취소
+                    throw new Error('Route change cancelled by canLeave guard');
+                }
             }
+        }
+    }
+    
+    /**
+     * 라우트 변경 후 처리
+     */
+    private afterRouteChange(): void {
+        this.updatePageLinks();
+        
+        // 스크롤 위치 초기화
+        window.scrollTo(0, 0);
+        
+        // 라우트 변경 이벤트 발생
+        document.dispatchEvent(new CustomEvent('aits:route-changed', {
+            detail: { route: this.getCurrentRoute() },
+            bubbles: true
+        }));
+    }
+    
+    /**
+     * 글로벌 에러 핸들러 설정
+     */
+    private setupGlobalErrorHandler(): void {
+        window.addEventListener('error', (event) => {
+            console.error('[Aits] Global error:', event.error);
+            this.handleGlobalError(event.error);
         });
+        
+        window.addEventListener('unhandledrejection', (event) => {
+            console.error('[Aits] Unhandled rejection:', event.reason);
+            this.handleGlobalError(event.reason);
+        });
+    }
+    
+    /**
+     * 글로벌 에러 처리
+     */
+    private handleGlobalError(error: any): void {
+        // 현재 컨트롤러의 onError 호출
+        if (this.activeController) {
+            const controller = this.activeController as any;
+            if (typeof controller.onError === 'function') {
+                try {
+                    controller.onError(error, new Context(this));
+                } catch (e) {
+                    console.error('[Aits] Error in controller.onError:', e);
+                }
+            }
+        }
+        
+        // 사용자에게 에러 표시 (Toast 사용 가능한 경우)
+        if (typeof (window as any).AitsToast !== 'undefined') {
+            (window as any).AitsToast.error('An error occurred. Please try again.');
+        }
     }
 
     /**
-     * 404 에러 처리
+     * 404 에러 처리 (개선된 버전)
      */
     private handle404(): void {
         console.error('[Aits] 404 Not Found: The requested route does not exist.');
         
-        // 404 페이지 렌더링 시도
-        if (this.routeDefinitions.some(r => r.path === '/404')) {
+        // 404 컨트롤러가 정의되어 있는지 확인
+        const has404Route = this.routeDefinitions.some(r => r.path === '/404');
+        
+        if (has404Route) {
+            // 404 라우트로 리다이렉트
             this.navigate('/404');
         } else {
-            // 기본 404 메시지 표시
-            const mainContainer = document.querySelector('[data-aits-main]');
-            if (mainContainer) {
-                mainContainer.innerHTML = `
-                    <div class="aits-404">
-                        <h1>404</h1>
-                        <p>Page not found</p>
-                        <a href="/" data-navigo>Go Home</a>
-                    </div>
-                `;
-                this.updatePageLinks();
-            }
+            // 기본 404 페이지 렌더링
+            this.renderDefault404Page();
+        }
+    }
+    
+    /**
+     * 기본 404 페이지 렌더링
+     */
+    private renderDefault404Page(): void {
+        const mainContainer = document.querySelector('[data-aits-main]');
+        if (mainContainer) {
+            mainContainer.innerHTML = `
+                <div class="aits-404" style="
+                    display: flex;
+                    flex-direction: column;
+                    align-items: center;
+                    justify-content: center;
+                    min-height: 50vh;
+                    text-align: center;
+                    padding: 2rem;
+                ">
+                    <h1 style="font-size: 4rem; margin: 0; color: #e5e7eb;">404</h1>
+                    <p style="font-size: 1.25rem; color: #6b7280; margin: 1rem 0;">Page not found</p>
+                    <p style="color: #9ca3af; margin-bottom: 2rem;">
+                        The page you are looking for doesn't exist or has been moved.
+                    </p>
+                    <a href="/" data-navigo style="
+                        display: inline-block;
+                        padding: 0.75rem 1.5rem;
+                        background: #3b82f6;
+                        color: white;
+                        text-decoration: none;
+                        border-radius: 0.375rem;
+                        transition: background 0.2s;
+                    " onmouseover="this.style.background='#2563eb'"
+                       onmouseout="this.style.background='#3b82f6'">
+                        Go Home
+                    </a>
+                </div>
+            `;
+            this.updatePageLinks();
         }
     }
 
@@ -219,6 +341,9 @@ export class Aits {
                 this.addRoute(route.path, route.controllerPath, route.methodName);
             });
             
+            // 라우터 초기화 완료 (404 핸들러 설정)
+            this.initializeRouter();
+            
             // 프레임워크가 이미 실행 중이면 현재 URL 재평가
             if (this.isRunning) {
                 this.navigator.resolve();
@@ -232,7 +357,7 @@ export class Aits {
     }
 
     /**
-     * 단일 라우팅 규칙을 추가합니다.
+     * 단일 라우팅 규칙을 추가합니다. (개선된 버전)
      * @param path - URL 경로
      * @param controllerPath - 컨트롤러 파일 경로
      * @param methodName - 실행할 메소드 이름
@@ -251,6 +376,17 @@ export class Aits {
                 
                 // 활성 컨트롤러 설정
                 this.activeController = controller;
+                
+                // canEnter 가드 체크
+                const controllerAny = controller as any;
+                if (typeof controllerAny.canEnter === 'function') {
+                    const canEnter = await controllerAny.canEnter(context);
+                    if (!canEnter) {
+                        console.log('[Aits] Route entry blocked by canEnter guard');
+                        this.activeController = null;
+                        return;
+                    }
+                }
 
                 // 생명주기 실행
                 if (typeof controller.onEnter === 'function') {
@@ -258,7 +394,7 @@ export class Aits {
                 }
                 
                 // 라우트 메소드 실행
-                const method = (controller as any)[methodName];
+                const method = controllerAny[methodName];
                 if (typeof method === 'function') {
                     await method.call(controller, context);
                 } else {
@@ -266,6 +402,20 @@ export class Aits {
                 }
             } catch (err) {
                 console.error(`[Aits] Error processing route '${path}':`, err);
+                
+                // 에러 처리
+                if (this.activeController) {
+                    const controllerAny = this.activeController as any;
+                    if (typeof controllerAny.onError === 'function') {
+                        try {
+                            await controllerAny.onError(err, new Context(this, match));
+                        } catch (e) {
+                            console.error('[Aits] Error in controller.onError:', e);
+                        }
+                    }
+                }
+                
+                // 404 페이지로 이동
                 this.handle404();
             }
         });
@@ -316,6 +466,9 @@ export class Aits {
                 await controller.onLoad(context);
             }
             
+            // 초기화 완료 표시
+            controller.setInitialized(true);
+            
             return controller;
         } catch (err) {
             console.error(`[Aits] Failed to load controller: ${controllerPath}`, err);
@@ -328,23 +481,29 @@ export class Aits {
      * 활성 컨트롤러를 정리합니다.
      */
     private async cleanupActiveController(): Promise<void> {
-        if (this.activeController && typeof this.activeController.onLeave === 'function') {
+        if (this.activeController) {
             try {
-                await this.activeController.onLeave();
+                // cleanup 메서드 호출 (자동 정리 포함)
+                await this.activeController.cleanup();
             } catch (err) {
-                console.error('[Aits] Error in controller.onLeave():', err);
+                console.error('[Aits] Error cleaning up controller:', err);
             }
         }
         this.activeController = null;
     }
 
     /**
-     * 프레임워크를 시작합니다.
+     * 프레임워크를 시작합니다. (개선된 버전)
      */
     public run(): void {
         if (this.isRunning) {
             console.warn('[Aits] Framework is already running');
             return;
+        }
+        
+        // 라우터가 초기화되지 않았으면 초기화
+        if (!this.isRouterInitialized) {
+            this.initializeRouter();
         }
         
         this.isRunning = true;
@@ -355,16 +514,39 @@ export class Aits {
         this.updatePageLinks();
         
         console.log('[Aits] Framework is running');
+        
+        // 프레임워크 시작 이벤트
+        document.dispatchEvent(new CustomEvent('aits:ready', {
+            detail: { aits: this },
+            bubbles: true
+        }));
     }
 
     /**
-     * 프레임워크를 중지합니다.
+     * 프레임워크를 중지합니다. (개선된 버전)
      */
     public async stop(): Promise<void> {
         if (!this.isRunning) return;
         
+        console.log('[Aits] Stopping framework...');
+        
         // 활성 컨트롤러 정리
         await this.cleanupActiveController();
+        
+        // 모든 컨트롤러 캐시 정리
+        this.controllers.clear();
+        
+        // 모든 모델 정리
+        this.models.forEach((registration) => {
+            if (registration.instance && 'destroy' in registration.instance) {
+                try {
+                    (registration.instance as any).destroy();
+                } catch (err) {
+                    console.error('[Aits] Error destroying model:', err);
+                }
+            }
+        });
+        this.models.clear();
         
         // 네비게이터 정리
         this.navigator.destroy();
@@ -373,12 +555,19 @@ export class Aits {
         this.loader.destroy();
         
         // 렌더러 정리
-        this.renderer.clearLayout();
+        this.renderer.destroy();
         
         this.isRunning = false;
+        this.isRouterInitialized = false;
         document.body.classList.remove('aits-ready');
         
         console.log('[Aits] Framework stopped');
+        
+        // 프레임워크 종료 이벤트
+        document.dispatchEvent(new CustomEvent('aits:stopped', {
+            detail: { aits: this },
+            bubbles: true
+        }));
     }
 
     /**
@@ -476,5 +665,53 @@ export class Aits {
     
     public getLoader(): Loader {
         return this.loader;
+    }
+    
+    /**
+     * 현재 등록된 라우트 목록 가져오기
+     */
+    public getRoutes(): RouteDefinition[] {
+        return [...this.routeDefinitions];
+    }
+    
+    /**
+     * 특정 경로의 라우트 정의 가져오기
+     */
+    public getRouteDefinition(path: string): RouteDefinition | undefined {
+        return this.routeDefinitions.find(r => r.path === path);
+    }
+    
+    /**
+     * 프레임워크 상태 정보 가져오기
+     */
+    public getStatus(): {
+        isRunning: boolean;
+        isRouterInitialized: boolean;
+        activeRoute: string;
+        controllerCount: number;
+        modelCount: number;
+        routeCount: number;
+    } {
+        return {
+            isRunning: this.isRunning,
+            isRouterInitialized: this.isRouterInitialized,
+            activeRoute: this.getCurrentRoute(),
+            controllerCount: this.controllers.size,
+            modelCount: this.models.size,
+            routeCount: this.routeDefinitions.length
+        };
+    }
+    
+    /**
+     * 개발자 도구용 디버그 정보 출력
+     */
+    public debug(): void {
+        console.group('[Aits Framework Debug Info]');
+        console.table(this.getStatus());
+        console.log('Routes:', this.routeDefinitions);
+        console.log('Models:', Array.from(this.models.keys()));
+        console.log('Controllers:', Array.from(this.controllers.keys()));
+        console.log('Cache Stats:', this.loader.getCacheStats());
+        console.groupEnd();
     }
 }

@@ -1,11 +1,13 @@
 import { AitsElement } from './AitsElement';
 
 /**
- * AitsToast - 토스트 알림 컴포넌트
+ * AitsToast - 토스트 알림 컴포넌트 (개선된 버전)
  * <div is="aits-toast">
+ * 타이머 정리가 강화된 버전
  */
 export class AitsToast extends AitsElement {
     private autoCloseTimer: number | null = null;
+    private animationTimer: number | null = null;
     
     static get observedAttributes() {
         return ['variant', 'position', 'duration', 'closable'];
@@ -78,6 +80,17 @@ export class AitsToast extends AitsElement {
                 }
             }
             
+            @keyframes fadeOut {
+                from {
+                    opacity: 1;
+                    transform: translateY(0);
+                }
+                to {
+                    opacity: 0;
+                    transform: translateY(-0.5rem);
+                }
+            }
+            
             .toast-info {
                 border-left: 4px solid var(--aits-color-info, #3b82f6);
             }
@@ -128,7 +141,17 @@ export class AitsToast extends AitsElement {
             });
         }
         
-        // 자동 닫기
+        // 자동 닫기 설정
+        this.setupAutoClose();
+    }
+    
+    /**
+     * 자동 닫기 설정
+     */
+    private setupAutoClose(): void {
+        // 기존 타이머 정리
+        this.clearTimers();
+        
         const duration = this.getNumberAttr('duration', 5000);
         if (duration > 0) {
             this.autoCloseTimer = window.setTimeout(() => {
@@ -137,17 +160,67 @@ export class AitsToast extends AitsElement {
         }
     }
     
-    public close(): void {
-        if (this.autoCloseTimer) {
+    /**
+     * 모든 타이머 정리
+     */
+    private clearTimers(): void {
+        if (this.autoCloseTimer !== null) {
             clearTimeout(this.autoCloseTimer);
+            this.autoCloseTimer = null;
         }
         
+        if (this.animationTimer !== null) {
+            clearTimeout(this.animationTimer);
+            this.animationTimer = null;
+        }
+    }
+    
+    /**
+     * 토스트 닫기
+     */
+    public close(): void {
+        // 타이머 정리
+        this.clearTimers();
+        
+        // 닫기 이벤트 발생
+        const cancelled = !this.emit('closing', {}, { cancelable: true });
+        if (cancelled) return;
+        
+        // 애니메이션 적용
         this.style.animation = 'fadeOut 0.3s ease forwards';
-        setTimeout(() => {
+        
+        // 애니메이션 완료 후 제거
+        this.animationTimer = window.setTimeout(() => {
+            this.emit('closed');
             this.remove();
         }, 300);
     }
     
+    /**
+     * 연결 해제 시 정리
+     */
+    disconnectedCallback(): void {
+        // 모든 타이머 정리
+        this.clearTimers();
+        
+        // 부모 클래스의 disconnectedCallback 호출
+        super.disconnectedCallback();
+    }
+    
+    /**
+     * 파괴 시 정리
+     */
+    public destroy(): void {
+        // 타이머 정리
+        this.clearTimers();
+        
+        // 부모 클래스의 destroy 호출
+        super.destroy();
+    }
+    
+    /**
+     * 정적 메서드: 토스트 표시
+     */
     public static show(message: string, options: {
         variant?: string;
         duration?: number;
@@ -160,11 +233,51 @@ export class AitsToast extends AitsElement {
         if (options.variant) toast.setAttribute('variant', options.variant);
         if (options.duration !== undefined) toast.setAttribute('duration', String(options.duration));
         if (options.position) toast.setAttribute('position', options.position);
-        if (options.closable) toast.setAttribute('closable', '');
+        if (options.closable !== undefined) toast.setAttribute('closable', String(options.closable));
         
         toast.textContent = message;
         document.body.appendChild(toast);
         
         return toast as AitsToast;
+    }
+    
+    /**
+     * 정적 메서드: 성공 토스트
+     */
+    public static success(message: string, options?: Omit<Parameters<typeof AitsToast.show>[1], 'variant'>): AitsToast {
+        return this.show(message, { ...options, variant: 'success' });
+    }
+    
+    /**
+     * 정적 메서드: 에러 토스트
+     */
+    public static error(message: string, options?: Omit<Parameters<typeof AitsToast.show>[1], 'variant'>): AitsToast {
+        return this.show(message, { ...options, variant: 'error' });
+    }
+    
+    /**
+     * 정적 메서드: 경고 토스트
+     */
+    public static warning(message: string, options?: Omit<Parameters<typeof AitsToast.show>[1], 'variant'>): AitsToast {
+        return this.show(message, { ...options, variant: 'warning' });
+    }
+    
+    /**
+     * 정적 메서드: 정보 토스트
+     */
+    public static info(message: string, options?: Omit<Parameters<typeof AitsToast.show>[1], 'variant'>): AitsToast {
+        return this.show(message, { ...options, variant: 'info' });
+    }
+    
+    /**
+     * 정적 메서드: 모든 토스트 닫기
+     */
+    public static closeAll(): void {
+        const toasts = document.querySelectorAll('[is="aits-toast"]');
+        toasts.forEach(toast => {
+            if (toast instanceof AitsToast) {
+                toast.close();
+            }
+        });
     }
 }

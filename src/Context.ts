@@ -1,50 +1,52 @@
 /**
  * =================================================================
- * Context.ts - 컨트롤러를 위한 만능 도구 상자
+ * Context.ts - 컨트롤러를 위한 만능 도구 상자 (개선된 버전)
  * =================================================================
  * @description
  * - 컨트롤러의 메소드가 실행될 때 주입되는 객체입니다.
- * - 라우팅 정보, 반응형 상태 관리, 리소스 로더 접근 등
- * 페이지 제어에 필요한 모든 것을 제공합니다.
- * - AI가 가장 쉽게 상태를 관리하고 UI를 업데이트할 수 있도록
- * '반응형 상태(Reactive State)' 기능을 핵심으로 합니다.
+ * - 타입 안전성이 강화된 반응형 상태 관리를 제공합니다.
  * @author Aits Framework AI
- * @version 0.2.0
+ * @version 0.3.0
  */
 
 import type { Aits } from './Aits';
 import type { Renderer } from './Renderer';
 import type { LoadOptions } from './Loader';
+import type { AitsElement } from './components';
 
 // Navigo의 match 객체에서 필요한 정보만 추출하여 타입을 정의
 export interface RouteInfo {
-    url: string;                               // 매칭된 전체 URL (e.g., '/articles/123?sort=desc')
-    path: string;                              // 파라미터가 적용된 경로 (e.g., '/articles/123')
-    route: string;                             // 등록된 원본 경로 (e.g., '/articles/:id')
-    params: Record<string, string> | null;     // URL 파라미터 (e.g., { id: '123' })
-    query: Record<string, string>;             // 쿼리 스트링 (e.g., { sort: 'desc' })
+    url: string;                               // 매칭된 전체 URL
+    path: string;                              // 파라미터가 적용된 경로
+    route: string;                             // 등록된 원본 경로
+    params: Record<string, string> | null;     // URL 파라미터
+    query: Record<string, string>;             // 쿼리 스트링
 }
 
 // 바인딩 요소 정의
 interface BoundElement {
     element: HTMLElement;
     property: string;
-    transform?: (value: any) => any;  // 값 변환 함수 (옵션)
+    transform?: (value: any) => any;
 }
 
 // 상태 옵저버 타입
-type StateObserver = (newValue: any, oldValue: any, key: string) => void;
+type StateObserver<T = any> = (newValue: T, oldValue: T, key: string) => void;
 
-export class Context {
+// 반응형 상태 타입
+export type ReactiveState<T extends Record<string, any> = Record<string, any>> = T;
+
+export class Context<TState extends Record<string, any> = Record<string, any>> {
     public readonly aits: Aits;
     public readonly route: RouteInfo;
-    public state: any;  // 반응형 상태 객체
+    public state: ReactiveState<TState>;  // 타입 안전성 개선
     
     private stateBindings: Map<string, BoundElement[]>;
     private stateObservers: Map<string, Set<StateObserver>>;
-    private stateValues: Map<string, any>;  // 이전 값 추적용
+    private stateValues: Map<string, any>;
+    private initialStateType?: TState;  // 초기 상태 타입 저장
 
-    constructor(aitsInstance: Aits, navigoMatch: any = {}) {
+    constructor(aitsInstance: Aits, navigoMatch: any = {}, initialState?: TState) {
         this.aits = aitsInstance;
         this.stateBindings = new Map();
         this.stateObservers = new Map();
@@ -53,8 +55,8 @@ export class Context {
         // Navigo의 match 객체를 RouteInfo 형태로 가공
         this.route = this._parseRoute(navigoMatch);
 
-        // 반응형 상태 프록시 생성
-        this.state = this._createReactiveState();
+        // 반응형 상태 프록시 생성 (초기값 포함)
+        this.state = this._createReactiveState(initialState || {} as TState);
     }
 
     /**
@@ -73,38 +75,50 @@ export class Context {
     }
 
     /**
-     * 반응형 상태 프록시 생성
+     * 반응형 상태 프록시 생성 (타입 안전성 강화)
      */
-    private _createReactiveState(): any {
-        return new Proxy({}, {
-            get: (target: any, property: string): any => {
-                // 중첩 객체도 반응형으로 만들기
-                const value = target[property];
+    private _createReactiveState<T extends Record<string, any>>(initial: T): ReactiveState<T> {
+        const handler: ProxyHandler<T> = {
+            get: (target: T, property: string | symbol): any => {
+                if (typeof property !== 'string') return target[property as keyof T];
+                
+                const value = target[property as keyof T];
                 if (value && typeof value === 'object' && !Array.isArray(value)) {
                     return this._createNestedProxy(value, property);
                 }
                 return value;
             },
-            set: (target: any, property: string, value: any): boolean => {
+            set: (target: T, property: string | symbol, value: any): boolean => {
+                if (typeof property !== 'string') {
+                    target[property as keyof T] = value;
+                    return true;
+                }
+                
                 const oldValue = this.stateValues.get(property);
-                target[property] = value;
+                target[property as keyof T] = value;
                 this.stateValues.set(property, value);
                 
-                // 값이 실제로 변경된 경우에만 업데이트
                 if (oldValue !== value) {
                     this._notifyStateChange(property, value, oldValue);
                 }
                 
                 return true;
             },
-            deleteProperty: (target: any, property: string): boolean => {
-                const oldValue = target[property];
-                delete target[property];
+            deleteProperty: (target: T, property: string | symbol): boolean => {
+                if (typeof property !== 'string') {
+                    delete target[property as keyof T];
+                    return true;
+                }
+                
+                const oldValue = target[property as keyof T];
+                delete target[property as keyof T];
                 this.stateValues.delete(property);
                 this._notifyStateChange(property, undefined, oldValue);
                 return true;
             }
-        });
+        };
+        
+        return new Proxy(initial, handler) as ReactiveState<T>;
     }
 
     /**
@@ -120,8 +134,7 @@ export class Context {
                 
                 if (oldValue !== value) {
                     this._notifyStateChange(fullKey, value, oldValue);
-                    // 부모 키도 업데이트 알림
-                    this._notifyStateChange(parentKey, this.state[parentKey], this.state[parentKey]);
+                    this._notifyStateChange(parentKey, this.state[parentKey as keyof TState], this.state[parentKey as keyof TState]);
                 }
                 
                 return true;
@@ -133,38 +146,32 @@ export class Context {
      * 상태 변경 알림
      */
     private _notifyStateChange(key: string, newValue: any, oldValue: any): void {
-        // 바인딩된 요소 업데이트
         this._updateBoundElements(key, newValue);
-        
-        // 옵저버 호출
         this._notifyObservers(key, newValue, oldValue);
     }
 
     /**
-     * 상태와 UI 요소를 바인딩합니다.
-     * @param stateKey - 상태 키 (중첩 지원: 'user.name')
-     * @param element - 바인딩할 요소
-     * @param property - 업데이트할 속성
-     * @param transform - 값 변환 함수 (옵션)
+     * 상태와 UI 요소를 바인딩합니다 (타입 안전성 강화)
      */
-    public bind(
-        stateKey: string, 
-        element: HTMLElement, 
+    public bind<K extends keyof TState>(
+        stateKey: K | string,
+        element: HTMLElement,
         property: string,
-        transform?: (value: any) => any
+        transform?: (value: TState[K] | any) => any
     ): void {
-        if (!this.stateBindings.has(stateKey)) {
-            this.stateBindings.set(stateKey, []);
+        const key = String(stateKey);
+        
+        if (!this.stateBindings.has(key)) {
+            this.stateBindings.set(key, []);
         }
         
-        this.stateBindings.get(stateKey)!.push({ 
-            element, 
+        this.stateBindings.get(key)!.push({
+            element,
             property,
-            transform 
+            transform
         });
         
-        // 초기값 설정
-        const currentValue = this._getNestedValue(stateKey);
+        const currentValue = this._getNestedValue(key);
         if (currentValue !== undefined) {
             this._updateElement({ element, property, transform }, currentValue);
         }
@@ -173,41 +180,45 @@ export class Context {
     /**
      * 바인딩 해제
      */
-    public unbind(stateKey: string, element?: HTMLElement): void {
+    public unbind(stateKey: keyof TState | string, element?: HTMLElement): void {
+        const key = String(stateKey);
+        
         if (!element) {
-            // 키에 대한 모든 바인딩 제거
-            this.stateBindings.delete(stateKey);
+            this.stateBindings.delete(key);
         } else {
-            // 특정 요소만 제거
-            const bindings = this.stateBindings.get(stateKey);
+            const bindings = this.stateBindings.get(key);
             if (bindings) {
                 const filtered = bindings.filter(b => b.element !== element);
                 if (filtered.length > 0) {
-                    this.stateBindings.set(stateKey, filtered);
+                    this.stateBindings.set(key, filtered);
                 } else {
-                    this.stateBindings.delete(stateKey);
+                    this.stateBindings.delete(key);
                 }
             }
         }
     }
 
     /**
-     * 상태 변경 옵저버 등록
+     * 상태 변경 옵저버 등록 (타입 안전성 강화)
      */
-    public observe(stateKey: string, callback: StateObserver): () => void {
-        if (!this.stateObservers.has(stateKey)) {
-            this.stateObservers.set(stateKey, new Set());
+    public observe<K extends keyof TState>(
+        stateKey: K | string,
+        callback: StateObserver<TState[K]>
+    ): () => void {
+        const key = String(stateKey);
+        
+        if (!this.stateObservers.has(key)) {
+            this.stateObservers.set(key, new Set());
         }
         
-        this.stateObservers.get(stateKey)!.add(callback);
+        this.stateObservers.get(key)!.add(callback);
         
-        // 구독 해제 함수 반환
         return () => {
-            const observers = this.stateObservers.get(stateKey);
+            const observers = this.stateObservers.get(key);
             if (observers) {
                 observers.delete(callback);
                 if (observers.size === 0) {
-                    this.stateObservers.delete(stateKey);
+                    this.stateObservers.delete(key);
                 }
             }
         };
@@ -217,7 +228,6 @@ export class Context {
      * 바인딩된 요소들 업데이트
      */
     private _updateBoundElements(key: string, value: any): void {
-        // 정확한 키 매칭
         const exactBindings = this.stateBindings.get(key);
         if (exactBindings) {
             exactBindings.forEach(binding => {
@@ -225,7 +235,6 @@ export class Context {
             });
         }
         
-        // 와일드카드 매칭 (부모 키가 변경된 경우 자식들도 업데이트)
         this.stateBindings.forEach((bindings, bindingKey) => {
             if (bindingKey.startsWith(key + '.')) {
                 const nestedValue = this._getNestedValue(bindingKey);
@@ -237,12 +246,14 @@ export class Context {
     }
 
     /**
-     * 단일 요소 업데이트
+     * 단일 요소 업데이트 (안전성 강화)
      */
     private _updateElement(binding: BoundElement, value: any): void {
         try {
             // DOM에서 제거된 요소 체크
             if (!document.body.contains(binding.element)) {
+                // 자동으로 바인딩 제거
+                this.cleanupStaleBindings();
                 return;
             }
             
@@ -252,11 +263,19 @@ export class Context {
             if (binding.property === 'class') {
                 binding.element.className = String(finalValue);
             } else if (binding.property === 'style') {
-                Object.assign(binding.element.style, finalValue);
+                if (typeof finalValue === 'object') {
+                    Object.assign(binding.element.style, finalValue);
+                } else {
+                    binding.element.setAttribute('style', String(finalValue));
+                }
             } else if (binding.property === 'dataset') {
-                Object.assign(binding.element.dataset, finalValue);
-            } else {
+                if (typeof finalValue === 'object') {
+                    Object.assign(binding.element.dataset, finalValue);
+                }
+            } else if (binding.property in binding.element) {
                 (binding.element as any)[binding.property] = finalValue;
+            } else {
+                binding.element.setAttribute(binding.property, String(finalValue));
             }
         } catch (e) {
             console.error(`[Context] Error updating element:`, e);
@@ -284,7 +303,7 @@ export class Context {
      */
     private _getNestedValue(key: string): any {
         const keys = key.split('.');
-        let value = this.state;
+        let value: any = this.state;
         
         for (const k of keys) {
             if (value == null) return undefined;
@@ -295,26 +314,42 @@ export class Context {
     }
 
     /**
-     * 상태 일괄 업데이트 (여러 값을 한번에 업데이트)
+     * 상태 일괄 업데이트 (타입 안전)
      */
-    public setState(updates: Record<string, any>): void {
+    public setState(updates: Partial<TState>): void {
         Object.entries(updates).forEach(([key, value]) => {
-            this.state[key] = value;
+            (this.state as any)[key] = value;
         });
     }
 
     /**
      * 상태 초기화
      */
-    public resetState(): void {
+    public resetState(newState?: TState): void {
         // 모든 키에 대해 undefined로 설정하여 옵저버 트리거
         this.stateValues.forEach((_, key) => {
-            this.state[key] = undefined;
+            (this.state as any)[key] = undefined;
         });
         
         // 프록시 재생성
-        this.state = this._createReactiveState();
+        this.state = this._createReactiveState(newState || {} as TState);
         this.stateValues.clear();
+    }
+
+    /**
+     * DOM에서 제거된 요소들의 바인딩 정리
+     */
+    private cleanupStaleBindings(): void {
+        this.stateBindings.forEach((bindings, key) => {
+            const validBindings = bindings.filter(b => document.body.contains(b.element));
+            if (validBindings.length < bindings.length) {
+                if (validBindings.length === 0) {
+                    this.stateBindings.delete(key);
+                } else {
+                    this.stateBindings.set(key, validBindings);
+                }
+            }
+        });
     }
 
     /**
@@ -328,9 +363,6 @@ export class Context {
 
     // === Renderer 접근 ===
     
-    /**
-     * Renderer 인스턴스 가져오기
-     */
     public get renderer(): Renderer {
         return this.aits.getRenderer();
     }
@@ -341,9 +373,6 @@ export class Context {
      * 단일 컴포넌트를 검색합니다.
      * @param selector - CSS 선택자
      * @returns 매칭된 컴포넌트 또는 null
-     * @example
-     * const list = ctx.query<AitsList>('#user-list');
-     * const form = ctx.query<AitsForm>('[is="aits-form"]');
      */
     public query<T extends HTMLElement = HTMLElement>(selector: string): T | null {
         return this.renderer.query<T>(selector);
@@ -353,24 +382,32 @@ export class Context {
      * 모든 매칭 컴포넌트를 검색합니다.
      * @param selector - CSS 선택자
      * @returns 매칭된 컴포넌트 배열
-     * @example
-     * const forms = ctx.queryAll<AitsForm>('[is="aits-form"]');
-     * const buttons = ctx.queryAll<HTMLButtonElement>('button.primary');
      */
     public queryAll<T extends HTMLElement = HTMLElement>(selector: string): T[] {
         return this.renderer.queryAll<T>(selector);
     }
     
     /**
-     * 특정 타입의 컴포넌트만 검색합니다.
+     * 특정 타입의 컴포넌트를 검색합니다 (AitsElement 반환)
      * @param componentType - 컴포넌트 타입 (is 속성값)
      * @returns 해당 타입의 컴포넌트 배열
      * @example
-     * const lists = ctx.queryByType<AitsList>('aits-list');
-     * const forms = ctx.queryByType<AitsForm>('aits-form');
+     * const lists = ctx.queryByType('aits-list');
      */
-    public queryByType<T extends HTMLElement = HTMLElement>(componentType: string): T[] {
-        return this.renderer.queryByType<T>(componentType);
+    public queryByType(componentType: string): AitsElement[] {
+        return this.renderer.queryByType(componentType);
+    }
+    
+    /**
+     * 특정 타입의 컴포넌트를 검색하고 타입 캐스팅합니다
+     * @param componentType - 컴포넌트 타입 (is 속성값)
+     * @returns 타입 캐스팅된 컴포넌트 배열
+     * @example
+     * import { AitsList } from './components';
+     * const lists = ctx.queryByTypeAs<AitsList>('aits-list');
+     */
+    public queryByTypeAs<T extends AitsElement>(componentType: string): T[] {
+        return this.renderer.queryByType(componentType) as T[];
     }
     
     /**
@@ -378,12 +415,9 @@ export class Context {
      * @param container - 검색할 컨테이너 요소
      * @param selector - CSS 선택자
      * @returns 매칭된 컴포넌트 또는 null
-     * @example
-     * const sidebar = ctx.query('#sidebar');
-     * const nav = ctx.queryIn<AitsNav>(sidebar, '[is="aits-nav"]');
      */
     public queryIn<T extends HTMLElement = HTMLElement>(
-        container: HTMLElement | null, 
+        container: HTMLElement | null,
         selector: string
     ): T | null {
         return this.renderer.queryIn<T>(container, selector);
@@ -394,12 +428,9 @@ export class Context {
      * @param container - 검색할 컨테이너 요소
      * @param selector - CSS 선택자
      * @returns 매칭된 컴포넌트 배열
-     * @example
-     * const main = ctx.query('main');
-     * const cards = ctx.queryAllIn<AitsCard>(main, '[is="aits-card"]');
      */
     public queryAllIn<T extends HTMLElement = HTMLElement>(
-        container: HTMLElement | null, 
+        container: HTMLElement | null,
         selector: string
     ): T[] {
         return this.renderer.queryAllIn<T>(container, selector);
@@ -416,16 +447,10 @@ export class Context {
 
     // === Navigation 메서드 ===
     
-    /**
-     * 내부 페이지 이동
-     */
     public navigate(url: string): void {
         this.aits.navigate(url);
     }
 
-    /**
-     * 외부 URL 리다이렉트
-     */
     public redirect(url: string, replace: boolean = false): void {
         if (replace) {
             window.location.replace(url);
@@ -434,76 +459,46 @@ export class Context {
         }
     }
 
-    /**
-     * 뒤로 가기
-     */
     public back(): void {
         this.aits.back();
     }
 
-    /**
-     * 앞으로 가기
-     */
     public forward(): void {
         this.aits.forward();
     }
 
-    /**
-     * 현재 경로 가져오기
-     */
     public getCurrentRoute(): string {
         return this.aits.getCurrentRoute();
     }
 
     // === Loader 프록시 메서드 ===
     
-    /**
-     * HTML 로드
-     */
     public html(src: string, options?: LoadOptions): Promise<string> {
         return this.aits.html(src, options);
     }
     
-    /**
-     * JSON 로드
-     */
     public json<T = any>(src: string, options?: LoadOptions): Promise<T> {
         return this.aits.json<T>(src, options);
     }
     
-    /**
-     * 스크립트 로드
-     */
     public script(src: string, options?: LoadOptions): Promise<void> {
         return this.aits.script(src, options);
     }
     
-    /**
-     * 스타일시트 로드
-     */
     public style(src: string, options?: LoadOptions): Promise<void> {
         return this.aits.style(src, options);
     }
 
     // === 유틸리티 메서드 ===
     
-    /**
-     * 쿼리 파라미터 가져오기
-     */
     public getQueryParam(key: string): string | undefined {
         return this.route.query[key];
     }
 
-    /**
-     * URL 파라미터 가져오기
-     */
     public getParam(key: string): string | undefined {
         return this.route.params?.[key];
     }
 
-    /**
-     * 쿼리 스트링 생성
-     */
     public buildQueryString(params: Record<string, any>): string {
         const searchParams = new URLSearchParams();
         Object.entries(params).forEach(([key, value]) => {
@@ -514,9 +509,6 @@ export class Context {
         return searchParams.toString();
     }
 
-    /**
-     * URL 생성 (파라미터 포함)
-     */
     public buildUrl(path: string, params?: Record<string, any>): string {
         if (!params) return path;
         

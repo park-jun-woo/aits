@@ -36,7 +36,13 @@ export { AitsButton } from './AitsButton';
 export { AitsInput } from './AitsInput';
 export { AitsSearch } from './AitsSearch';
 export { AitsFilter } from './AitsFilter';
-export { AitsSort } from './AitsSort';
+export { 
+    AitsSort, 
+    AitsSortGroup,
+    type SortDirection,
+    type SortState,
+    type SortChangeEvent 
+} from './AitsSort';
 export { AitsPagination } from './AitsPagination';
 export { AitsMore } from './AitsMore';
 
@@ -61,7 +67,7 @@ import { AitsButton } from './AitsButton';
 import { AitsInput } from './AitsInput';
 import { AitsSearch } from './AitsSearch';
 import { AitsFilter } from './AitsFilter';
-import { AitsSort } from './AitsSort';
+import { AitsSort, AitsSortGroup } from './AitsSort';
 import { AitsPagination } from './AitsPagination';
 import { AitsMore } from './AitsMore';
 import { AitsToast } from './AitsToast';
@@ -69,40 +75,45 @@ import { AitsModal } from './AitsModal';
 import { AitsProgress } from './AitsProgress';
 import { AitsEmpty } from './AitsEmpty';
 import { AitsError } from './AitsError';
+import { AitsElement } from './AitsElement';
+
+// 컴포넌트 생성자 타입 정의
+type ComponentConstructor = new () => AitsElement;
 
 /**
  * 모든 컴포넌트 매핑
  * is 속성값 -> 컴포넌트 클래스
  */
-export const COMPONENT_REGISTRY = new Map([
+export const COMPONENT_REGISTRY = new Map<string, ComponentConstructor>([
     // 데이터 컴포넌트
-    ['aits-list', AitsList],
-    ['aits-article', AitsArticle],
-    ['aits-card', AitsCard],
+    ['aits-list', AitsList as ComponentConstructor],
+    ['aits-article', AitsArticle as ComponentConstructor],
+    ['aits-card', AitsCard as ComponentConstructor],
     
     // 레이아웃 컴포넌트
-    ['aits-page', AitsPage],
-    ['aits-header', AitsHeader],
-    ['aits-footer', AitsFooter],
-    ['aits-nav', AitsNav],
-    ['aits-sidebar', AitsSidebar],
+    ['aits-page', AitsPage as ComponentConstructor],
+    ['aits-header', AitsHeader as ComponentConstructor],
+    ['aits-footer', AitsFooter as ComponentConstructor],
+    ['aits-nav', AitsNav as ComponentConstructor],
+    ['aits-sidebar', AitsSidebar as ComponentConstructor],
     
     // 인터랙션 컴포넌트
-    ['aits-form', AitsForm],
-    ['aits-button', AitsButton],
-    ['aits-input', AitsInput],
-    ['aits-search', AitsSearch],
-    ['aits-filter', AitsFilter],
-    ['aits-sort', AitsSort],
-    ['aits-pagination', AitsPagination],
-    ['aits-more', AitsMore],
+    ['aits-form', AitsForm as ComponentConstructor],
+    ['aits-button', AitsButton as ComponentConstructor],
+    ['aits-input', AitsInput as ComponentConstructor],
+    ['aits-search', AitsSearch as ComponentConstructor],
+    ['aits-filter', AitsFilter as ComponentConstructor],
+    ['aits-sort', AitsSort as ComponentConstructor],
+    ['aits-sort-group', AitsSortGroup as ComponentConstructor],
+    ['aits-pagination', AitsPagination as ComponentConstructor],
+    ['aits-more', AitsMore as ComponentConstructor],
     
     // 피드백 컴포넌트
-    ['aits-toast', AitsToast],
-    ['aits-modal', AitsModal],
-    ['aits-progress', AitsProgress],
-    ['aits-empty', AitsEmpty],
-    ['aits-error', AitsError]
+    ['aits-toast', AitsToast as ComponentConstructor],
+    ['aits-modal', AitsModal as ComponentConstructor],
+    ['aits-progress', AitsProgress as ComponentConstructor],
+    ['aits-empty', AitsEmpty as ComponentConstructor],
+    ['aits-error', AitsError as ComponentConstructor]
 ]);
 
 /**
@@ -128,6 +139,7 @@ export const COMPONENT_GROUPS = {
         'aits-search',
         'aits-filter',
         'aits-sort',
+        'aits-sort-group',
         'aits-pagination',
         'aits-more'
     ],
@@ -143,7 +155,7 @@ export const COMPONENT_GROUPS = {
 /**
  * 컴포넌트가 사용할 시맨틱 HTML 태그
  */
-export const SEMANTIC_TAGS = {
+export const SEMANTIC_TAGS: Record<string, string[]> = {
     // 데이터
     'aits-list': ['ul', 'ol', 'div'],
     'aits-article': ['article'],
@@ -162,6 +174,8 @@ export const SEMANTIC_TAGS = {
     'aits-input': ['input', 'div'],
     'aits-search': ['div', 'form'],
     'aits-filter': ['div', 'form'],
+    'aits-sort': ['button', 'th', 'div'],
+    'aits-sort-group': ['div', 'section'],
     'aits-pagination': ['nav'],
     'aits-more': ['button'],
     
@@ -180,8 +194,8 @@ export class ComponentUtils {
     /**
      * is 값으로 컴포넌트 클래스 가져오기
      */
-    static getComponentClass(isValue: string): typeof AitsElement | undefined {
-        return COMPONENT_REGISTRY.get(isValue) as any;
+    static getComponentClass(isValue: string): ComponentConstructor | undefined {
+        return COMPONENT_REGISTRY.get(isValue);
     }
     
     /**
@@ -200,7 +214,7 @@ export class ComponentUtils {
      * 시맨틱 태그 검증
      */
     static isValidSemanticTag(isValue: string, tagName: string): boolean {
-        const validTags = SEMANTIC_TAGS[isValue as keyof typeof SEMANTIC_TAGS];
+        const validTags = SEMANTIC_TAGS[isValue];
         return validTags ? validTags.includes(tagName.toLowerCase()) : false;
     }
     
@@ -210,7 +224,12 @@ export class ComponentUtils {
     static createComponent(isValue: string): AitsElement | null {
         const ComponentClass = this.getComponentClass(isValue);
         if (ComponentClass) {
-            return new ComponentClass() as AitsElement;
+            try {
+                return new ComponentClass();
+            } catch (error) {
+                console.error(`Failed to create component ${isValue}:`, error);
+                return null;
+            }
         }
         return null;
     }
@@ -239,5 +258,82 @@ export class ComponentUtils {
         element.parentNode?.replaceChild(component, element);
         
         return component;
+    }
+    
+    /**
+     * 모든 컴포넌트를 브라우저에 등록
+     * customElements.define을 사용한 Web Components 등록
+     */
+    static registerAll(): void {
+        COMPONENT_REGISTRY.forEach((ComponentClass, isValue) => {
+            // Web Components는 '-'를 포함해야 함
+            if (isValue.includes('-')) {
+                try {
+                    // 이미 등록되었는지 확인
+                    if (!customElements.get(isValue)) {
+                        // Customized built-in elements 방식
+                        // 각 컴포넌트의 기본 태그 찾기
+                        const validTags = SEMANTIC_TAGS[isValue];
+                        if (validTags && validTags.length > 0) {
+                            const baseTag = validTags[0];
+                            // ComponentClass는 이미 구체적인 클래스이므로 안전하게 전달
+                            customElements.define(isValue, ComponentClass as CustomElementConstructor, { extends: baseTag });
+                        }
+                    }
+                } catch (error) {
+                    console.warn(`Failed to register component ${isValue}:`, error);
+                }
+            }
+        });
+    }
+    
+    /**
+     * 특정 컴포넌트만 등록
+     */
+    static register(isValue: string): boolean {
+        const ComponentClass = this.getComponentClass(isValue);
+        if (!ComponentClass) return false;
+        
+        const validTags = SEMANTIC_TAGS[isValue];
+        if (!validTags || validTags.length === 0) return false;
+        
+        try {
+            if (!customElements.get(isValue)) {
+                const baseTag = validTags[0];
+                customElements.define(isValue, ComponentClass as CustomElementConstructor, { extends: baseTag });
+            }
+            return true;
+        } catch (error) {
+            console.warn(`Failed to register component ${isValue}:`, error);
+            return false;
+        }
+    }
+    
+    /**
+     * 컴포넌트가 등록되었는지 확인
+     */
+    static isRegistered(isValue: string): boolean {
+        return !!customElements.get(isValue);
+    }
+    
+    /**
+     * 컴포넌트가 활성화 가능한지 확인
+     */
+    static isComponentAvailable(isValue: string): boolean {
+        return COMPONENT_REGISTRY.has(isValue);
+    }
+    
+    /**
+     * 모든 사용 가능한 컴포넌트 목록
+     */
+    static getAvailableComponents(): string[] {
+        return Array.from(COMPONENT_REGISTRY.keys());
+    }
+    
+    /**
+     * 특정 그룹의 컴포넌트 목록
+     */
+    static getComponentsByGroup(group: keyof typeof COMPONENT_GROUPS): string[] {
+        return COMPONENT_GROUPS[group] || [];
     }
 }

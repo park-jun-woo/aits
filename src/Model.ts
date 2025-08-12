@@ -1,25 +1,26 @@
 /**
  * =================================================================
- * Model.ts - Aits 애플리케이션 데이터 처리의 기반
+ * Model.ts - Aits 애플리케이션 데이터 처리의 기반 (개선된 버전)
  * =================================================================
  * @description
  * - 모든 데이터 모델 클래스가 상속받아야 하는 추상 클래스입니다.
- * - 백엔드 API와의 통신(CRUD)을 위한 표준화된 인터페이스를 제공합니다.
- * - fetch API를 래핑하여 반복적인 코드를 줄이고, AI가 API 연동 로직을
- * 쉽게 생성할 수 있도록 돕습니다.
+ * - 타입 안전성이 강화된 API 에러 처리를 제공합니다.
  * @author Aits Framework AI
- * @version 0.2.1
+ * @version 0.3.0
  */
 
 import type { Aits } from './Aits';
 import type { IApiAdapter, AitsDataOptions } from './ApiAdapter';
 
-// API 에러 정보
-export interface ApiError {
+// API 에러 정보 (타입 안전성 강화)
+export interface ApiError<T = unknown> {
     status: number;
     statusText: string;
     message?: string;
-    data?: any;
+    data?: T;
+    timestamp?: string;
+    requestId?: string;
+    code?: string;
 }
 
 // API 요청 옵션
@@ -45,13 +46,24 @@ export interface RequestOptions {
 
 // 응답 인터셉터 타입
 export type ResponseInterceptor = (response: Response) => Promise<Response>;
-export type ErrorInterceptor = (error: ApiError) => Promise<any>;
+export type ErrorInterceptor<T = unknown> = (error: ApiError<T>) => Promise<any>;
 
-export abstract class Model {
+// 페이지네이션 응답 타입
+export interface PaginatedResponse<T> {
+    items: T[];
+    total: number;
+    page: number;
+    limit: number;
+    totalPages: number;
+    hasNext: boolean;
+    hasPrev: boolean;
+}
+
+export abstract class Model<TData = any> {
     protected aits: Aits;
     protected apiAdapter: IApiAdapter;
     
-    // 각 모델이 담당하는 API의 기본 경로 (e.g., '/api/v1/users')
+    // 각 모델이 담당하는 API의 기본 경로
     protected abstract readonly apiPrefix: string;
     
     // 기본 요청 옵션
@@ -62,9 +74,12 @@ export abstract class Model {
         withCredentials: true // 쿠키 포함
     };
     
-    // 인터셉터
+    // 인터셉터 (타입 안전성 강화)
     private responseInterceptors: ResponseInterceptor[] = [];
     private errorInterceptors: ErrorInterceptor[] = [];
+    
+    // 진행 중인 요청 추적
+    private activeRequests: Map<string, AbortController> = new Map();
 
     constructor(aitsInstance: Aits) {
         this.aits = aitsInstance;
@@ -89,41 +104,41 @@ export abstract class Model {
         data[pkField] = value;
     }
 
-    // === 단일 데이터 CRUD 메서드 ===
+    // === 단일 데이터 CRUD 메서드 (타입 안전성 강화) ===
 
     /**
      * ID로 단일 데이터를 조회합니다.
      */
-    public getOne<T = any>(id: string | number, params?: Record<string, any>): Promise<T> {
-        return this.get<T>(`/${id}`, params);
+    public getOne(id: string | number, params?: Record<string, any>): Promise<TData> {
+        return this.get<TData>(`/${id}`, params);
     }
 
     /**
      * 새로운 데이터를 생성합니다.
      */
-    public createOne<T = any>(data: object): Promise<T> {
-        return this.post<T>('', data);
+    public createOne(data: Partial<TData>): Promise<TData> {
+        return this.post<TData>('', data);
     }
 
     /**
      * 기존 데이터 전체를 수정합니다.
      */
-    public updateOne<T = any>(id: string | number, data: object): Promise<T> {
-        return this.put<T>(`/${id}`, data);
+    public updateOne(id: string | number, data: Partial<TData>): Promise<TData> {
+        return this.put<TData>(`/${id}`, data);
     }
 
     /**
      * 특정 데이터의 일부를 수정합니다.
      */
-    public patchOne<T = any>(id: string | number, data: object): Promise<T> {
-        return this.patch<T>(`/${id}`, data);
+    public patchOne(id: string | number, data: Partial<TData>): Promise<TData> {
+        return this.patch<TData>(`/${id}`, data);
     }
 
     /**
      * 특정 데이터를 삭제합니다.
      */
-    public removeOne<T = any>(id: string | number): Promise<T> {
-        return this.delete<T>(`/${id}`);
+    public removeOne(id: string | number): Promise<TData | void> {
+        return this.delete<TData>(`/${id}`);
     }
 
     // === 목록 조회 메서드 ===
@@ -131,38 +146,38 @@ export abstract class Model {
     /**
      * 전체 목록을 조회합니다.
      */
-    public getAll<T = any>(params?: Record<string, any>): Promise<T> {
-        return this.get<T>('', params);
+    public getAll(params?: Record<string, any>): Promise<TData[]> {
+        return this.get<TData[]>('', params);
     }
 
     /**
      * 페이지네이션이 적용된 목록을 조회합니다.
      */
-    public getPaged<T = any>(options: AitsDataOptions = {}): Promise<T> {
+    public getPaged(options: AitsDataOptions = {}): Promise<PaginatedResponse<TData>> {
         const backendParams = this.apiAdapter.transformDataOptions(options);
-        return this.get<T>('', backendParams);
+        return this.get<PaginatedResponse<TData>>('', backendParams);
     }
 
     /**
      * 검색 조건으로 목록을 조회합니다.
      */
-    public search<T = any>(query: string, options: AitsDataOptions = {}): Promise<T> {
+    public search(query: string, options: AitsDataOptions = {}): Promise<TData[]> {
         const params = this.apiAdapter.transformDataOptions({
             ...options,
             search: query
         });
-        return this.get<T>('/search', params);
+        return this.get<TData[]>('/search', params);
     }
 
     /**
      * 필터 조건으로 목록을 조회합니다.
      */
-    public filter<T = any>(filters: Record<string, any>, options: AitsDataOptions = {}): Promise<T> {
+    public filter(filters: Record<string, any>, options: AitsDataOptions = {}): Promise<TData[]> {
         const params = this.apiAdapter.transformDataOptions({
             ...options,
             filter: filters
         });
-        return this.get<T>('', params);
+        return this.get<TData[]>('', params);
     }
 
     // === 벌크 작업 메서드 ===
@@ -170,15 +185,14 @@ export abstract class Model {
     /**
      * 여러 개의 데이터를 한 번에 생성합니다.
      */
-    public createMany<T = any>(data: object[]): Promise<T> {
-        return this.post<T>('/bulk', data);
+    public createMany(data: Partial<TData>[]): Promise<TData[]> {
+        return this.post<TData[]>('/bulk', data);
     }
 
     /**
      * 여러 개의 데이터를 한 번에 수정합니다.
      */
-    public updateMany<T = any>(data: Array<Record<string, any>>): Promise<T> {
-        // PK 필드가 포함되어 있는지 확인
+    public updateMany(data: Array<Partial<TData> & Record<string, any>>): Promise<TData[]> {
         const pkField = this.apiAdapter.getPrimaryKeyField();
         const invalidItems = data.filter(item => !item[pkField]);
         
@@ -186,13 +200,13 @@ export abstract class Model {
             throw new Error(`[Model] Missing primary key '${pkField}' in ${invalidItems.length} items`);
         }
         
-        return this.put<T>('/bulk', data);
+        return this.put<TData[]>('/bulk', data);
     }
 
     /**
      * 여러 개의 데이터를 한 번에 부분 수정합니다.
      */
-    public patchMany<T = any>(data: Array<Record<string, any>>): Promise<T> {
+    public patchMany(data: Array<Partial<TData> & Record<string, any>>): Promise<TData[]> {
         const pkField = this.apiAdapter.getPrimaryKeyField();
         const invalidItems = data.filter(item => !item[pkField]);
         
@@ -200,18 +214,18 @@ export abstract class Model {
             throw new Error(`[Model] Missing primary key '${pkField}' in ${invalidItems.length} items`);
         }
         
-        return this.patch<T>('/bulk', data);
+        return this.patch<TData[]>('/bulk', data);
     }
 
     /**
      * 여러 개의 데이터를 한 번에 삭제합니다.
      */
-    public removeMany<T = any>(ids: (string | number)[]): Promise<T> {
+    public removeMany(ids: (string | number)[]): Promise<void> {
         if (ids.length === 0) {
             throw new Error('[Model] No IDs provided for bulk delete');
         }
         
-        return this.delete<T>('/bulk', { ids });
+        return this.delete<void>('/bulk', { ids });
     }
 
     // === 특수 작업 메서드 ===
@@ -301,7 +315,7 @@ export abstract class Model {
      */
     protected async delete<T>(path: string, body?: any): Promise<T> {
         const url = this.buildUrl(path);
-        const options: RequestOptions = { 
+        const options: RequestOptions = {
             method: 'DELETE',
             headers: body ? { 'Content-Type': 'application/json' } : undefined,
             body: body ? JSON.stringify(body) : undefined
@@ -328,10 +342,10 @@ export abstract class Model {
     }
 
     /**
-     * 에러 인터셉터 추가
+     * 에러 인터셉터 추가 (타입 안전)
      */
-    public addErrorInterceptor(interceptor: ErrorInterceptor): void {
-        this.errorInterceptors.push(interceptor);
+    public addErrorInterceptor<T = unknown>(interceptor: ErrorInterceptor<T>): void {
+        this.errorInterceptors.push(interceptor as ErrorInterceptor);
     }
 
     /**
@@ -340,6 +354,27 @@ export abstract class Model {
     public clearInterceptors(): void {
         this.responseInterceptors = [];
         this.errorInterceptors = [];
+    }
+
+    // === 요청 취소 관리 ===
+
+    /**
+     * 특정 요청 취소
+     */
+    public cancelRequest(requestId: string): void {
+        const controller = this.activeRequests.get(requestId);
+        if (controller) {
+            controller.abort();
+            this.activeRequests.delete(requestId);
+        }
+    }
+
+    /**
+     * 모든 진행 중인 요청 취소
+     */
+    public cancelAllRequests(): void {
+        this.activeRequests.forEach(controller => controller.abort());
+        this.activeRequests.clear();
     }
 
     // === Private 헬퍼 메서드 ===
@@ -362,10 +397,8 @@ export abstract class Model {
             // 쿼리 스트링 추가
             Object.entries(cleanParams).forEach(([key, value]) => {
                 if (Array.isArray(value)) {
-                    // 배열 처리
                     value.forEach(v => baseUrl.searchParams.append(key, String(v)));
                 } else if (typeof value === 'object') {
-                    // 객체는 JSON 문자열로
                     baseUrl.searchParams.append(key, JSON.stringify(value));
                 } else {
                     baseUrl.searchParams.append(key, String(value));
@@ -377,7 +410,7 @@ export abstract class Model {
     }
 
     /**
-     * HTTP 요청 실행
+     * HTTP 요청 실행 (개선된 에러 처리)
      */
     private async request<T>(url: string, options: RequestOptions): Promise<T> {
         const mergedOptions: RequestOptions = {
@@ -386,13 +419,19 @@ export abstract class Model {
             credentials: this.defaultOptions.withCredentials ? 'include' : 'same-origin'
         };
         
-        // 타임아웃 처리
+        // 요청 ID 생성
+        const requestId = `${options.method}-${url}-${Date.now()}`;
+        
+        // AbortController 생성
         const controller = new AbortController();
+        this.activeRequests.set(requestId, controller);
+        
+        // 타임아웃 처리
         const timeoutId = setTimeout(() => {
             controller.abort();
         }, mergedOptions.timeout!);
         
-        // fetch에 전달할 옵션 준비 (커스텀 속성 제거)
+        // fetch에 전달할 옵션 준비
         const fetchOptions: RequestInit = {
             method: mergedOptions.method,
             headers: mergedOptions.headers,
@@ -462,7 +501,14 @@ export abstract class Model {
             
             // 타임아웃 에러
             if (error.name === 'AbortError') {
-                throw new Error(`[Model] Request timeout after ${mergedOptions.timeout}ms`);
+                const timeoutError: ApiError = {
+                    status: 0,
+                    statusText: 'Timeout',
+                    message: `Request timeout after ${mergedOptions.timeout}ms`,
+                    timestamp: new Date().toISOString(),
+                    requestId
+                };
+                throw timeoutError;
             }
             
             // 재시도 로직
@@ -470,7 +516,6 @@ export abstract class Model {
                 console.log(`[Model] Retrying request (${mergedOptions.retries} attempts left)`);
                 await this.delay(mergedOptions.retryDelay!);
                 
-                // 재시도를 위한 새로운 옵션 객체 생성
                 const retryOptions: RequestOptions = {
                     ...options,
                     retries: mergedOptions.retries! - 1
@@ -481,31 +526,40 @@ export abstract class Model {
             
             console.error('[Model] Request failed:', error);
             throw error;
+        } finally {
+            // 요청 추적에서 제거
+            this.activeRequests.delete(requestId);
         }
     }
 
     /**
-     * API 에러 객체 생성
+     * API 에러 객체 생성 (타입 안전성 강화)
      */
-    private async createApiError(response: Response): Promise<ApiError> {
-        let data: any;
+    private async createApiError<T = unknown>(response: Response): Promise<ApiError<T>> {
+        let data: T | undefined;
+        let message: string | undefined;
         
         try {
             const contentType = response.headers.get('content-type');
             if (contentType?.includes('application/json')) {
-                data = await response.json();
+                const jsonData = await response.json();
+                data = jsonData as T;
+                message = jsonData?.message || jsonData?.error;
             } else {
-                data = await response.text();
+                const textData = await response.text();
+                message = textData;
             }
         } catch {
-            data = { message: 'Failed to parse error response' };
+            message = 'Failed to parse error response';
         }
         
-        const error: ApiError = {
+        const error: ApiError<T> = {
             status: response.status,
             statusText: response.statusText,
-            message: data?.message || data?.error || `HTTP ${response.status} ${response.statusText}`,
-            data
+            message: message || `HTTP ${response.status} ${response.statusText}`,
+            data,
+            timestamp: new Date().toISOString(),
+            requestId: response.headers.get('x-request-id') || undefined
         };
         
         return error;
@@ -516,7 +570,7 @@ export abstract class Model {
      */
     private isRetryableError(error: any): boolean {
         // 네트워크 에러 또는 5xx 서버 에러
-        return !error.status || error.status >= 500;
+        return !error.status || (error.status >= 500 && error.status < 600);
     }
 
     /**
@@ -554,5 +608,13 @@ export abstract class Model {
      */
     public setApiAdapter(adapter: IApiAdapter): void {
         this.apiAdapter = adapter;
+    }
+    
+    /**
+     * 정리 메서드
+     */
+    public destroy(): void {
+        this.cancelAllRequests();
+        this.clearInterceptors();
     }
 }

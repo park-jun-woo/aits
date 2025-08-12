@@ -3,10 +3,9 @@
  * Renderer.ts - 지능적인 뷰 및 레이아웃 관리자 (개선된 버전)
  * =================================================================
  * @description
- * - 새로운 컴포넌트 시스템과 통합된 렌더러
- * - is 속성 기반 컴포넌트 활성화를 직접 처리
+ * - 메모리 누수 방지와 컴포넌트 중복 등록 체크가 강화된 렌더러
  * @author Aits Framework AI
- * @version 1.0.0
+ * @version 1.1.0
  */
 
 import type { Aits } from './Aits';
@@ -222,6 +221,13 @@ interface RenderedView {
     template: string;
 }
 
+// 컴포넌트 등록 정보
+interface ComponentRegistration {
+    component: AitsElement;
+    type: string;
+    registeredAt: number;
+}
+
 export class Renderer {
     private aits: Aits;
     
@@ -234,9 +240,10 @@ export class Renderer {
         modal?: RenderedView;
     } = {};
     
-    // 활성화된 컴포넌트 추적
-    private activeComponents: Set<AitsElement> = new Set();
+    // 활성화된 컴포넌트 추적 (중복 체크 강화)
+    private activeComponents: Map<AitsElement, ComponentRegistration> = new Map();
     private componentsByType: Map<string, Set<AitsElement>> = new Map();
+    private componentsByElement: WeakMap<HTMLElement, AitsElement> = new WeakMap();
     
     // 현재 실행 중인 전환 효과
     private activeTransition: Transition | null = null;
@@ -250,12 +257,18 @@ export class Renderer {
         aside?: HTMLElement;
         modal?: HTMLElement;
     };
+    
+    // 메모리 정리 인터벌
+    private cleanupInterval: number | null = null;
 
     public constructor(aitsInstance: Aits) {
         this.aits = aitsInstance;
         
         // 레이아웃 컨테이너 초기화
         this.containers = this._initializeContainers();
+        
+        // 주기적인 메모리 정리 시작
+        this._startPeriodicCleanup();
     }
     
     /**
@@ -291,6 +304,12 @@ export class Renderer {
             
             if (!isValue) return;
             
+            // 이미 활성화된 컴포넌트인지 체크
+            if (this.componentsByElement.has(htmlElement)) {
+                console.warn(`[Renderer] Element already activated as component: ${isValue}`);
+                return;
+            }
+            
             // 시맨틱 태그 검증
             if (!ComponentUtils.isValidSemanticTag(isValue, htmlElement.tagName)) {
                 console.warn(`[Renderer] Invalid semantic tag <${htmlElement.tagName.toLowerCase()}> for component ${isValue}`);
@@ -323,11 +342,24 @@ export class Renderer {
     }
     
     /**
-     * 컴포넌트를 추적 시스템에 등록
+     * 컴포넌트를 추적 시스템에 등록 (중복 체크 강화)
      */
     private _registerComponent(component: AitsElement, type: string): void {
-        // 활성 컴포넌트 세트에 추가
-        this.activeComponents.add(component);
+        // 이미 등록되었는지 확인
+        if (this.activeComponents.has(component)) {
+            console.warn(`[Renderer] Component already registered: ${type}`);
+            return;
+        }
+        
+        // 등록 정보 생성
+        const registration: ComponentRegistration = {
+            component,
+            type,
+            registeredAt: Date.now()
+        };
+        
+        // 활성 컴포넌트 맵에 추가
+        this.activeComponents.set(component, registration);
         
         // 타입별 그룹화
         if (!this.componentsByType.has(type)) {
@@ -335,27 +367,41 @@ export class Renderer {
         }
         this.componentsByType.get(type)!.add(component);
         
+        // 약한 참조로 요소 매핑
+        this.componentsByElement.set(component, component);
+        
         // 컴포넌트에 활성화 상태 표시
         (component as any).__aitsActivated = true;
+        (component as any).__aitsRegisteredAt = registration.registeredAt;
     }
     
     /**
      * 컴포넌트를 추적 시스템에서 제거
      */
     private _unregisterComponent(component: AitsElement): void {
-        // 활성 컴포넌트 세트에서 제거
+        const registration = this.activeComponents.get(component);
+        if (!registration) return;
+        
+        // 활성 컴포넌트 맵에서 제거
         this.activeComponents.delete(component);
         
         // 타입별 세트에서 제거
-        const isValue = component.getAttribute('is');
-        if (isValue && this.componentsByType.has(isValue)) {
-            this.componentsByType.get(isValue)!.delete(component);
+        const typeSet = this.componentsByType.get(registration.type);
+        if (typeSet) {
+            typeSet.delete(component);
             
             // 비어있는 세트 제거
-            if (this.componentsByType.get(isValue)!.size === 0) {
-                this.componentsByType.delete(isValue);
+            if (typeSet.size === 0) {
+                this.componentsByType.delete(registration.type);
             }
         }
+        
+        // 약한 참조 제거 (자동으로 가비지 컬렉션됨)
+        // this.componentsByElement는 WeakMap이므로 명시적 제거 불필요
+        
+        // 활성화 상태 제거
+        delete (component as any).__aitsActivated;
+        delete (component as any).__aitsRegisteredAt;
     }
     
     /**
@@ -364,18 +410,26 @@ export class Renderer {
     public activateComponentsIn(container: HTMLElement): void {
         // 컨테이너 자체 처리
         if (container.hasAttribute('is')) {
-            const enhanced = ComponentUtils.enhanceElement(container);
-            if (enhanced) {
-                this._registerComponent(enhanced, enhanced.getAttribute('is')!);
+            // 이미 활성화되었는지 확인
+            if (!this.componentsByElement.has(container)) {
+                const enhanced = ComponentUtils.enhanceElement(container);
+                if (enhanced) {
+                    this._registerComponent(enhanced, enhanced.getAttribute('is')!);
+                }
             }
         }
         
         // 하위 요소들 처리
         const elementsWithIs = container.querySelectorAll('[is]');
         elementsWithIs.forEach(element => {
-            const enhanced = ComponentUtils.enhanceElement(element as HTMLElement);
-            if (enhanced) {
-                this._registerComponent(enhanced, enhanced.getAttribute('is')!);
+            const htmlElement = element as HTMLElement;
+            
+            // 이미 활성화되었는지 확인
+            if (!this.componentsByElement.has(htmlElement)) {
+                const enhanced = ComponentUtils.enhanceElement(htmlElement);
+                if (enhanced) {
+                    this._registerComponent(enhanced, enhanced.getAttribute('is')!);
+                }
             }
         });
     }
@@ -387,7 +441,7 @@ export class Renderer {
      */
     public query<T extends HTMLElement = HTMLElement>(selector: string): T | null {
         // 활성화된 컴포넌트 중에서 검색
-        for (const component of this.activeComponents) {
+        for (const [component] of this.activeComponents) {
             if (component.matches(selector)) {
                 return component as unknown as T;
             }
@@ -402,18 +456,20 @@ export class Renderer {
      */
     public queryAll<T extends HTMLElement = HTMLElement>(selector: string): T[] {
         const results: T[] = [];
+        const seen = new Set<Element>();
         
         // 활성화된 컴포넌트 중에서 검색
-        for (const component of this.activeComponents) {
+        for (const [component] of this.activeComponents) {
             if (component.matches(selector)) {
                 results.push(component as unknown as T);
+                seen.add(component);
             }
         }
         
         // 일반 DOM 요소도 포함
         const elements = document.querySelectorAll(selector);
         elements.forEach(el => {
-            if (!this.activeComponents.has(el as AitsElement)) {
+            if (!seen.has(el)) {
                 results.push(el as T);
             }
         });
@@ -423,23 +479,35 @@ export class Renderer {
     
     /**
      * 특정 타입의 컴포넌트만 검색
+     * @param componentType - 컴포넌트 타입 (is 속성값)
+     * @returns 해당 타입의 컴포넌트 배열
      */
-    public queryByType<T extends AitsElement = AitsElement>(componentType: string): T[] {
+    public queryByType(componentType: string): AitsElement[] {
         const components = this.componentsByType.get(componentType);
-        return components ? Array.from(components) as unknown as T[] : [];
+        return components ? Array.from(components) : [];
+    }
+    
+    /**
+     * 특정 타입의 컴포넌트를 검색하고 타입 캐스팅
+     * @param componentType - 컴포넌트 타입 (is 속성값)
+     * @returns 타입 캐스팅된 컴포넌트 배열
+     */
+    public queryByTypeAs<T extends AitsElement>(componentType: string): T[] {
+        const components = this.componentsByType.get(componentType);
+        return components ? Array.from(components) as T[] : [];
     }
     
     /**
      * 컨테이너 내에서 컴포넌트를 검색
      */
     public queryIn<T extends HTMLElement = HTMLElement>(
-        container: HTMLElement | null, 
+        container: HTMLElement | null,
         selector: string
     ): T | null {
         if (!container) return null;
         
         // 컨테이너 내의 활성화된 컴포넌트 검색
-        for (const component of this.activeComponents) {
+        for (const [component] of this.activeComponents) {
             if (container.contains(component) && component.matches(selector)) {
                 return component as unknown as T;
             }
@@ -453,24 +521,26 @@ export class Renderer {
      * 컨테이너 내의 모든 매칭 컴포넌트를 검색
      */
     public queryAllIn<T extends HTMLElement = HTMLElement>(
-        container: HTMLElement | null, 
+        container: HTMLElement | null,
         selector: string
     ): T[] {
         if (!container) return [];
         
         const results: T[] = [];
+        const seen = new Set<Element>();
         
         // 컨테이너 내의 활성화된 컴포넌트 검색
-        for (const component of this.activeComponents) {
+        for (const [component] of this.activeComponents) {
             if (container.contains(component) && component.matches(selector)) {
                 results.push(component as unknown as T);
+                seen.add(component);
             }
         }
         
         // 일반 DOM 요소도 포함
         const elements = container.querySelectorAll(selector);
         elements.forEach(el => {
-            if (!this.activeComponents.has(el as AitsElement)) {
+            if (!seen.has(el)) {
                 results.push(el as T);
             }
         });
@@ -482,7 +552,7 @@ export class Renderer {
      * 컴포넌트가 활성화되었는지 확인
      */
     public isComponentActivated(element: HTMLElement): boolean {
-        return this.activeComponents.has(element as AitsElement) || 
+        return this.componentsByElement.has(element) ||
                (element as any).__aitsActivated === true;
     }
     
@@ -526,17 +596,42 @@ export class Renderer {
     }
     
     /**
-     * 현재 레이아웃을 정리
+     * 현재 레이아웃을 정리 (메모리 누수 방지 강화)
      */
     public clearLayout(): void {
         // 모든 활성 컴포넌트 정리
-        this.activeComponents.forEach(component => {
-            component.destroy();
+        const componentsToRemove = Array.from(this.activeComponents.keys());
+        
+        componentsToRemove.forEach(component => {
+            try {
+                component.destroy();
+            } catch (error) {
+                console.error('[Renderer] Error destroying component:', error);
+            }
             this._unregisterComponent(component);
         });
         
+        // 맵 완전 정리
+        this.activeComponents.clear();
+        this.componentsByType.clear();
+        // WeakMap은 자동으로 가비지 컬렉션됨
+        
         // 레이아웃 정보 초기화
         this.currentLayout = {};
+        
+        // DOM 요소 제거
+        if (this.containers.header) {
+            this.containers.header.innerHTML = '';
+        }
+        if (this.containers.footer) {
+            this.containers.footer.innerHTML = '';
+        }
+        if (this.containers.aside) {
+            this.containers.aside.innerHTML = '';
+        }
+        if (this.containers.main) {
+            this.containers.main.innerHTML = '';
+        }
     }
     
     /**
@@ -547,14 +642,19 @@ export class Renderer {
         if (view) {
             // 섹션 내의 컴포넌트들 제거
             const componentsToRemove: AitsElement[] = [];
-            this.activeComponents.forEach(component => {
+            
+            this.activeComponents.forEach((registration, component) => {
                 if (view.element.contains(component)) {
                     componentsToRemove.push(component);
                 }
             });
             
             componentsToRemove.forEach(component => {
-                component.destroy();
+                try {
+                    component.destroy();
+                } catch (error) {
+                    console.error('[Renderer] Error destroying component:', error);
+                }
                 this._unregisterComponent(component);
             });
             
@@ -699,5 +799,53 @@ export class Renderer {
         if (this.activeTransition) {
             this.activeTransition.updateProgress(progress.progress);
         }
+    }
+    
+    /**
+     * DOM에서 제거된 컴포넌트들 정리
+     */
+    private _cleanupStaleComponents(): void {
+        const staleComponents: AitsElement[] = [];
+        
+        this.activeComponents.forEach((registration, component) => {
+            if (!document.body.contains(component)) {
+                staleComponents.push(component);
+            }
+        });
+        
+        staleComponents.forEach(component => {
+            this._unregisterComponent(component);
+        });
+        
+        if (staleComponents.length > 0) {
+            console.log(`[Renderer] Cleaned up ${staleComponents.length} stale components`);
+        }
+    }
+    
+    /**
+     * 주기적인 메모리 정리 시작
+     */
+    private _startPeriodicCleanup(): void {
+        // 30초마다 정리
+        this.cleanupInterval = window.setInterval(() => {
+            this._cleanupStaleComponents();
+        }, 30000);
+    }
+    
+    /**
+     * 렌더러 파괴
+     */
+    public destroy(): void {
+        // 정리 인터벌 중지
+        if (this.cleanupInterval) {
+            clearInterval(this.cleanupInterval);
+            this.cleanupInterval = null;
+        }
+        
+        // 모든 컴포넌트 정리
+        this.clearLayout();
+        
+        // 컨테이너 제거
+        this.containers.root?.remove();
     }
 }
