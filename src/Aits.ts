@@ -1,12 +1,13 @@
 /**
  * =================================================================
- * Aits.ts - Aits 프레임워크의 중앙 관제 센터 (개선된 버전)
+ * Aits.ts - Aits 프레임워크의 중앙 관제 센터 (Hydrator 통합 버전)
  * =================================================================
  * @description
  * - 프레임워크의 전체 생명주기, 라우팅, 컨트롤러 관리를 담당합니다.
+ * - SSR to SPA Hydration 기능이 통합되었습니다.
  * - 메모리 관리, 에러 처리, 라우터 초기화가 개선되었습니다.
  * @author Aits Framework AI
- * @version 0.3.0
+ * @version 0.4.0
  */
 
 import Navigo from 'navigo';
@@ -16,6 +17,7 @@ import { Controller } from './Controller';
 import { Model } from './Model';
 import { Renderer, LayoutConfig, TransitionOptions, Transition } from './Renderer';
 import { IApiAdapter, DefaultApiAdapter } from './ApiAdapter';
+import { Hydrator, HydrationOptions, HydrationResult } from './Hydrator';
 
 // 라우팅 규칙을 정의하기 위한 타입
 export interface RouteDefinition {
@@ -31,10 +33,17 @@ export interface ModelRegistration {
     loaded?: boolean;
 }
 
+// 프레임워크 실행 옵션
+export interface RunOptions {
+    autoHydrate?: boolean;
+    hydrationOptions?: HydrationOptions;
+}
+
 export class Aits {
     private navigator: Navigo;
     private loader: Loader;
     private renderer: Renderer;
+    private hydrator: Hydrator;
     public apiAdapter: IApiAdapter;
     
     // 컨트롤러 관리
@@ -48,11 +57,16 @@ export class Aits {
     private isRunning: boolean;
     private routeDefinitions: RouteDefinition[];
     private isRouterInitialized: boolean = false;  // 라우터 초기화 상태
+    
+    // Hydration 관련 상태
+    private hydrationMode: 'none' | 'auto' | 'manual' | 'partial' = 'none';
+    private hydrationResult: HydrationResult | null = null;
 
     public constructor() {
         // 기본 초기화
         this.loader = new Loader(this);
         this.renderer = new Renderer(this);
+        this.hydrator = new Hydrator(this);
         this.apiAdapter = new DefaultApiAdapter();
         
         this.controllers = new Map();
@@ -226,6 +240,99 @@ export class Aits {
         }
     }
 
+    // === Hydration 메서드 ===
+    
+    /**
+     * SSR HTML을 SPA로 Hydration
+     * @param options - Hydration 옵션
+     */
+    public async hydrate(options: HydrationOptions = {}): Promise<HydrationResult> {
+        if (this.isRunning) {
+            console.warn('[Aits] Framework is already running');
+            return this.hydrationResult || {
+                success: false,
+                mode: 'spa',
+                components: 0,
+                duration: 0,
+                errors: [new Error('Framework already running')]
+            };
+        }
+        
+        this.hydrationMode = options.mode || 'auto';
+        
+        // Hydration 실행
+        this.hydrationResult = await this.hydrator.hydrate(options);
+        
+        if (this.hydrationResult.success) {
+            this.isRunning = true;
+            document.body.classList.add('aits-ready', 'aits-hydrated');
+            
+            // 라우터 초기화 (이미 존재하는 DOM 기준)
+            if (!this.isRouterInitialized) {
+                this.initializeRouter();
+            }
+            
+            // 현재 라우트 해결
+            this.navigator.resolve();
+            
+            console.log('[Aits] Hydration successful');
+            
+            // Hydration 성공 이벤트
+            document.dispatchEvent(new CustomEvent('aits:hydration-complete', {
+                detail: this.hydrationResult,
+                bubbles: true
+            }));
+        }
+        
+        return this.hydrationResult;
+    }
+    
+    /**
+     * 자동 Hydration 시도
+     */
+    public async tryHydrate(): Promise<boolean> {
+        // DOM에 AITS 컴포넌트가 있는지 확인
+        const hasAitsComponents = document.querySelector('[is^="aits-"]') !== null;
+        const hasAitsLayout = document.querySelector('[data-aits-main]') !== null;
+        
+        if (hasAitsComponents || hasAitsLayout) {
+            const result = await this.hydrate({ mode: 'auto' });
+            return result.success;
+        }
+        
+        return false;
+    }
+    
+    /**
+     * Hydration 상태 확인
+     */
+    public isHydrated(): boolean {
+        return this.hydrator.getHydrationState();
+    }
+    
+    /**
+     * Hydration 결과 가져오기
+     */
+    public getHydrationResult(): HydrationResult | null {
+        return this.hydrationResult;
+    }
+    
+    /**
+     * 특정 요소만 Hydration
+     */
+    public async hydrateElement(element: HTMLElement): Promise<void> {
+        return this.hydrator.hydrateElement(element);
+    }
+    
+    /**
+     * 라우트 패턴 추가 (Hydration용)
+     */
+    public addRoutePattern(pattern: RegExp, controller: string): void {
+        this.hydrator.addRoutePattern(pattern, controller);
+    }
+
+    // === API 어댑터 관리 ===
+
     /**
      * 프레임워크에서 사용할 API 어댑터를 설정합니다.
      * @param adapter - 사용할 API 어댑터 인스턴스
@@ -236,6 +343,8 @@ export class Aits {
         }
         this.apiAdapter = adapter;
     }
+
+    // === 모델 관리 ===
 
     /**
      * 모델을 등록합니다. (인스턴스 또는 경로)
@@ -319,6 +428,8 @@ export class Aits {
             console.log(`[Aits] Preloaded ${loadPromises.length} models`);
         }
     }
+
+    // === 라우팅 관리 ===
 
     /**
      * 라우팅 설정 파일을 동적으로 불러와 라우팅 규칙을 설정합니다.
@@ -421,6 +532,8 @@ export class Aits {
         });
     }
 
+    // === 컨트롤러 관리 ===
+
     /**
      * 컨트롤러를 가져옵니다. (캐시 사용)
      * @param controllerPath - 컨트롤러 파일 경로
@@ -492,13 +605,23 @@ export class Aits {
         this.activeController = null;
     }
 
+    // === 프레임워크 실행 ===
+
     /**
-     * 프레임워크를 시작합니다. (개선된 버전)
+     * 프레임워크를 시작합니다. (Hydration 옵션 추가)
      */
-    public run(): void {
+    public async run(options?: RunOptions): Promise<void> {
         if (this.isRunning) {
             console.warn('[Aits] Framework is already running');
             return;
+        }
+        
+        // Auto-hydrate 옵션 확인
+        if (options?.autoHydrate) {
+            const hydrated = await this.tryHydrate();
+            if (hydrated) {
+                return; // Hydration 성공 시 일반 run 건너뛰기
+            }
         }
         
         // 라우터가 초기화되지 않았으면 초기화
@@ -557,9 +680,14 @@ export class Aits {
         // 렌더러 정리
         this.renderer.destroy();
         
+        // Hydrator 정리
+        this.hydrator.destroy();
+        
         this.isRunning = false;
         this.isRouterInitialized = false;
-        document.body.classList.remove('aits-ready');
+        this.hydrationMode = 'none';
+        this.hydrationResult = null;
+        document.body.classList.remove('aits-ready', 'aits-hydrated');
         
         console.log('[Aits] Framework stopped');
         
@@ -569,6 +697,8 @@ export class Aits {
             bubbles: true
         }));
     }
+
+    // === 네비게이션 ===
 
     /**
      * 페이지 내의 data-navigo 링크들을 갱신합니다.
@@ -687,6 +817,8 @@ export class Aits {
     public getStatus(): {
         isRunning: boolean;
         isRouterInitialized: boolean;
+        isHydrated: boolean;
+        hydrationMode: string;
         activeRoute: string;
         controllerCount: number;
         modelCount: number;
@@ -695,6 +827,8 @@ export class Aits {
         return {
             isRunning: this.isRunning,
             isRouterInitialized: this.isRouterInitialized,
+            isHydrated: this.isHydrated(),
+            hydrationMode: this.hydrationMode,
             activeRoute: this.getCurrentRoute(),
             controllerCount: this.controllers.size,
             modelCount: this.models.size,
@@ -712,6 +846,11 @@ export class Aits {
         console.log('Models:', Array.from(this.models.keys()));
         console.log('Controllers:', Array.from(this.controllers.keys()));
         console.log('Cache Stats:', this.loader.getCacheStats());
+        
+        if (this.hydrationResult) {
+            console.log('Hydration Result:', this.hydrationResult);
+        }
+        
         console.groupEnd();
     }
 }
