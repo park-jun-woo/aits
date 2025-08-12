@@ -11,7 +11,7 @@
  */
 
 import Navigo from 'navigo'; // 강력하고 유연한 클라이언트 사이드 라우터
-import { Loader } from './Loader'; // 모든 리소스 로딩을 담당
+import { Loader, LoadOptions } from './Loader'; // 모든 리소스 로딩을 담당
 import { Context } from './Context'; // 컨트롤러에게 주입될 실행 컨텍스트
 import { Controller } from './Controller'; // 모든 컨트롤러의 기반 클래스
 import { Model } from './Model'; // 모든 모델의 기반 클래스
@@ -247,24 +247,19 @@ export class Aits {
         this.navigator.navigate(url);
     }
 
-    getView
-    public render(html: string): HTMLElement {
-        return this.renderer.render(html);
-    }
-
-    public view(src: string, onLoad?: (el: HTMLElement) => void) {
-        return this.loader.view(src, onLoad);
+    public html(src: string, options: LoadOptions = {}) {
+        return this.loader.html(src, options);
     }
     
     public json(src: string) {
         return this.loader.json(src);
     }
 
-    public js(src: string) {
-        return this.loader.js(src);
+    public script(src: string) {
+        return this.loader.script(src);
     }
 
-    public css(src: string) {
-        return this.loader.css(src);
+    public style(src: string) {
+        return this.loader.style(src);
     }
 }

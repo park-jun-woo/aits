@@ -1,247 +1,648 @@
 /**
  * =================================================================
- * Loader.ts - 지능적인 리소스 관리자
+ * Loader.ts - 순수 리소스 관리자 (Pure Resource Manager)
  * =================================================================
  * @description
- * - HTML(view), JS(model), CSS, JSON 등 모든 외부 리소스의 로딩을 전담합니다.
- * - 지능적인 캐싱과 자동 메모리 관리를 통해 애플리케이션의 성능을 최적화합니다.
- * - 모든 리소스 로딩은 Promise 기반으로 동작하여 비동기 처리를 보장합니다.
- * @author Aits Framework AI (by parkjunwoo)
- * @version 0.1.0
+ * - HTML, JSON, JS, CSS 등 모든 외부 리소스의 로딩과 캐싱만을 전담합니다.
+ * - DOM 조작에 일체 관여하지 않으며, 순수한 데이터(문자열, 객체)만 반환합니다.
+ * - 진행률 추적 시스템을 제공하여 Transition과 동기화할 수 있습니다.
+ * - 지능적인 캐싱과 메모리 관리를 통해 애플리케이션 성능을 최적화합니다.
+ * @author Aits Framework AI
+ * @version 0.2.0
  */
+
 import type { Aits } from './Aits';
 
-// 로드된 View를 캐싱하기 위한 타입 정의
-type CacheEntry = {
-    promise: Promise<HTMLElement>;
-};
+// 로딩 진행률을 추적하기 위한 인터페이스
+export interface LoadingProgress {
+    loaded: number;      // 로드된 바이트 수
+    total: number;       // 전체 바이트 수
+    progress: number;    // 0~1 사이의 진행률
+    resource: string;    // 리소스 식별자
+}
+
+// 리소스 로딩 옵션
+export interface LoadOptions {
+    cache?: boolean;                                    // 캐싱 여부 (기본: true)
+    priority?: 'high' | 'normal' | 'low';              // 로딩 우선순위
+    onProgress?: (progress: LoadingProgress) => void;   // 진행률 콜백
+    signal?: AbortSignal;                               // 취소 신호
+}
+
+// 캐시 엔트리 타입
+interface CacheEntry<T> {
+    data: T;
+    timestamp: number;
+    size: number;
+    usage: number;  // 사용 횟수
+}
+
+// 병렬 로딩을 위한 배치 로딩 결과
+export interface BatchLoadResult<T> {
+    results: Map<string, T>;
+    errors: Map<string, Error>;
+    totalProgress: LoadingProgress;
+}
 
 export class Loader {
     private aits: Aits;
-    private promiseCache: Map<string, CacheEntry>;
-    private templateCache: Map<string, string>;
-    private viewUsage: Map<string, number>; // 뷰의 마지막 사용 시간을 기록 (for LRU)
-    private readonly MAX_VIEWS_IN_CACHE: number = 10; // 메모리에 유지할 최대 뷰 개수
+    
+    // 타입별 캐시 저장소
+    private htmlCache: Map<string, CacheEntry<string>>;
+    private jsonCache: Map<string, CacheEntry<any>>;
+    private scriptCache: Set<string>;  // 스크립트는 중복 로드 방지만 체크
+    private styleCache: Set<string>;   // 스타일시트도 중복 로드 방지만 체크
+    
+    // 진행 중인 요청 추적 (중복 요청 방지)
+    private pendingRequests: Map<string, Promise<any>>;
+    
+    // 메모리 관리 설정
+    private readonly MAX_CACHE_SIZE: number = 10 * 1024 * 1024; // 10MB
+    private readonly MAX_CACHE_AGE: number = 5 * 60 * 1000;     // 5분
+    private currentCacheSize: number = 0;
+    
+    // 진행률 추적을 위한 전역 리스너
+    private globalProgressListeners: Set<(progress: LoadingProgress) => void>;
 
     public constructor(aitsInstance: Aits) {
         this.aits = aitsInstance;
-        this.promiseCache = new Map();
-        this.templateCache = new Map();
-        this.viewUsage = new Map();
+        this.htmlCache = new Map();
+        this.jsonCache = new Map();
+        this.scriptCache = new Set();
+        this.styleCache = new Set();
+        this.pendingRequests = new Map();
+        this.globalProgressListeners = new Set();
+        
+        // 주기적인 캐시 정리
+        this._startCacheCleanup();
     }
 
     /**
-     * ViewManager나 Controller가 원본 HTML 템플릿을 가져가기 위한 핵심 메서드.
-     * @param src - 가져올 HTML 파일의 경로
-     * @returns 원본 HTML 텍스트 또는 undefined
+     * HTML 리소스를 로드합니다.
+     * @param src - HTML 파일의 경로
+     * @param options - 로딩 옵션
+     * @returns 순수한 HTML 문자열
      */
-    public async getView(src: string): Promise<string | undefined> {
-        if (this.templateCache.has(src)) {
-            return this.templateCache.get(src);
+    public async html(src: string, options: LoadOptions = {}): Promise<string> {
+        const cacheKey = `html:${src}`;
+        
+        // 캐시 확인
+        if (options.cache !== false) {
+            const cached = this._getCached(this.htmlCache, src);
+            if (cached) return cached;
         }
-        // 캐시에 없으면 fetch 후 저장
-        const html = await this._fetchHtml(src);
-        this.templateCache.set(src, html);
-        return html;
-    }
-
-    /**
-     * Header HTML을 로드하고 렌더링된 HTMLElement의 Promise를 반환합니다.
-     */
-    public async header(src: string): Promise<HTMLElement> {
-        const cacheKey = `header:${src}`;
-        if (this.promiseCache.has(cacheKey)) {
-            return this.promiseCache.get(cacheKey)!.promise;
+        
+        // 중복 요청 방지
+        if (this.pendingRequests.has(cacheKey)) {
+            return this.pendingRequests.get(cacheKey);
         }
-
-        const promise = this.getView(src)
+        
+        // 새로운 요청
+        const request = this._fetchWithProgress(src, 'text', options)
             .then(html => {
-                if (!html) throw new Error(`Header HTML not found at: ${src}`);
-                // 렌더링 책임을 ViewManager에게 위임하여 메모리상에 Element 생성
-                return this.aits.render(html);
+                if (options.cache !== false) {
+                    this._setCached(this.htmlCache, src, html);
+                }
+                return html;
             })
-            .catch(err => {
-                this.promiseCache.delete(cacheKey);
-                throw err;
+            .finally(() => {
+                this.pendingRequests.delete(cacheKey);
             });
         
-        this.promiseCache.set(cacheKey, { promise });
-        return promise;
+        this.pendingRequests.set(cacheKey, request);
+        return request;
     }
 
     /**
-     * Footer HTML을 로드하고 렌더링된 HTMLElement의 Promise를 반환합니다.
+     * JSON 데이터를 로드합니다.
+     * @param src - JSON 파일의 경로
+     * @param options - 로딩 옵션
+     * @returns 파싱된 JSON 객체
      */
-    public async footer(src: string): Promise<HTMLElement> {
-        const cacheKey = `footer:${src}`;
-        if (this.promiseCache.has(cacheKey)) {
-            return this.promiseCache.get(cacheKey)!.promise;
+    public async json<T = any>(src: string, options: LoadOptions = {}): Promise<T> {
+        const cacheKey = `json:${src}`;
+        
+        // 캐시 확인
+        if (options.cache !== false) {
+            const cached = this._getCached(this.jsonCache, src);
+            if (cached) return cached;
         }
-
-        const promise = this.getView(src)
-            .then(html => {
-                if (!html) throw new Error(`Footer HTML not found at: ${src}`);
-                return this.aits.render(html);
+        
+        // 중복 요청 방지
+        if (this.pendingRequests.has(cacheKey)) {
+            return this.pendingRequests.get(cacheKey);
+        }
+        
+        // 새로운 요청
+        const request = this._fetchWithProgress(src, 'json', options)
+            .then(data => {
+                if (options.cache !== false) {
+                    this._setCached(this.jsonCache, src, data);
+                }
+                return data;
             })
-            .catch(err => {
-                this.promiseCache.delete(cacheKey);
-                throw err;
+            .finally(() => {
+                this.pendingRequests.delete(cacheKey);
             });
-
-        this.promiseCache.set(cacheKey, { promise });
-        return promise;
+        
+        this.pendingRequests.set(cacheKey, request);
+        return request;
     }
 
     /**
-     * View HTML을 로드하고 렌더링된 HTMLElement의 Promise를 반환합니다.
+     * JavaScript 파일을 로드합니다.
+     * @param src - JS 파일의 경로
+     * @param options - 로딩 옵션
      */
-    public async view(src: string): Promise<HTMLElement> {
-        const cacheKey = `view:${src}`;
-        if (this.promiseCache.has(cacheKey)) {
-            this.viewUsage.set(cacheKey, Date.now());
-            return this.promiseCache.get(cacheKey)!.promise;
-        }
-
-        const promise = this.getView(src)
-            .then(html => {
-                if (!html) throw new Error(`View HTML not found at: ${src}`);
-                const element = this.aits.render(html);
-                element.dataset.viewSrc = src; // 디버깅용 정보는 유지
-                element.hidden = true;         // 화면 전환 효과를 위해 기본 숨김
-                return element;
-            })
-            .catch(err => {
-                this.promiseCache.delete(cacheKey);
-                this.viewUsage.delete(cacheKey);
-                throw err;
-            });
-
-        this._cacheView(cacheKey, { promise });
-        return promise;
-    }
-
-    /**
-     * JSON 파일을 fetch API로 로드하여 파싱합니다.
-     * @param src - 로드할 JSON 파일의 경로
-     */
-    public async json(src: string): Promise<any> {
+    public async script(src: string, options: LoadOptions = {}): Promise<void> {
         const url = this._toAbsoluteUrl(src);
-        const response = await fetch(url);
-        if (!response.ok) {
-            throw new Error(`Failed to fetch JSON: ${src} - ${response.statusText}`);
+        
+        // 이미 로드된 스크립트 체크
+        if (this.scriptCache.has(url)) {
+            options.onProgress?.({ loaded: 1, total: 1, progress: 1, resource: src });
+            return;
         }
-        return response.json();
-    }
-
-    /**
-     * 일반 JavaScript 파일을 <script> 태그로 동적 로드합니다.
-     * @param src - 로드할 JS 파일의 경로
-     */
-    public async js(src: string): Promise<void> {
-        const url = this._toAbsoluteUrl(src);
-        if (document.querySelector(`script[src="${url}"]`)) return; // 이미 로드되었으면 중복 실행 방지
-
+        
         return new Promise((resolve, reject) => {
             const script = document.createElement('script');
             script.src = url;
             script.async = true;
-            script.onload = () => resolve();
-            script.onerror = () => reject(new Error(`Failed to load script: ${src}`));
+            
+            // 우선순위 설정
+            if (options.priority === 'high') {
+                script.fetchPriority = 'high';
+            } else if (options.priority === 'low') {
+                script.fetchPriority = 'low';
+            }
+            
+            // 취소 처리
+            if (options.signal) {
+                options.signal.addEventListener('abort', () => {
+                    script.remove();
+                    reject(new Error(`Script loading aborted: ${src}`));
+                });
+            }
+            
+            script.onload = () => {
+                this.scriptCache.add(url);
+                options.onProgress?.({ loaded: 1, total: 1, progress: 1, resource: src });
+                resolve();
+            };
+            
+            script.onerror = () => {
+                reject(new Error(`Failed to load script: ${src}`));
+            };
+            
             document.head.appendChild(script);
         });
     }
 
     /**
-     * CSS 파일을 <link> 태그로 동적 로드합니다.
-     * @param src - 로드할 CSS 파일의 경로
+     * CSS 파일을 로드합니다.
+     * @param src - CSS 파일의 경로
+     * @param options - 로딩 옵션
      */
-    public async css(src: string): Promise<void> {
+    public async style(src: string, options: LoadOptions = {}): Promise<void> {
         const url = this._toAbsoluteUrl(src);
-        if (document.querySelector(`link[rel="stylesheet"][href="${url}"]`)) return;
-
+        
+        // 이미 로드된 스타일시트 체크
+        if (this.styleCache.has(url)) {
+            options.onProgress?.({ loaded: 1, total: 1, progress: 1, resource: src });
+            return;
+        }
+        
         return new Promise((resolve, reject) => {
             const link = document.createElement('link');
             link.rel = 'stylesheet';
             link.href = url;
-            link.onload = () => resolve();
-            link.onerror = () => reject(new Error(`Failed to load css: ${src}`));
+            
+            // 우선순위 설정
+            if (options.priority === 'high') {
+                link.fetchPriority = 'high';
+            } else if (options.priority === 'low') {
+                link.fetchPriority = 'low';
+            }
+            
+            // 취소 처리
+            if (options.signal) {
+                options.signal.addEventListener('abort', () => {
+                    link.remove();
+                    reject(new Error(`Style loading aborted: ${src}`));
+                });
+            }
+            
+            link.onload = () => {
+                this.styleCache.add(url);
+                options.onProgress?.({ loaded: 1, total: 1, progress: 1, resource: src });
+                resolve();
+            };
+            
+            link.onerror = () => {
+                reject(new Error(`Failed to load stylesheet: ${src}`));
+            };
+            
             document.head.appendChild(link);
         });
     }
 
-    // --- Private Helper Methods ---
-
     /**
-     * 특정 태그로 요소를 감싸는 헬퍼 메소드
+     * 여러 리소스를 병렬로 로드합니다.
+     * @param resources - 로드할 리소스 목록
+     * @param onProgress - 전체 진행률 콜백
+     * @returns 배치 로딩 결과
      */
-    private _wrapInTag(element: HTMLElement, tagName: 'header' | 'footer' | 'section'): HTMLElement {
-        const wrapper = document.createElement(tagName);
-        wrapper.appendChild(element);
-        return wrapper;
+    public async batch<T = any>(
+        resources: Array<{ src: string; type: 'html' | 'json' | 'script' | 'style'; options?: LoadOptions }>,
+        onProgress?: (progress: LoadingProgress) => void
+    ): Promise<BatchLoadResult<T>> {
+        const results = new Map<string, T>();
+        const errors = new Map<string, Error>();
+        const progressMap = new Map<string, number>();
+        
+        // 각 리소스의 진행률 추적
+        const updateTotalProgress = () => {
+            const values = Array.from(progressMap.values());
+            const totalProgress = values.reduce((sum, p) => sum + p, 0) / resources.length;
+            
+            onProgress?.({
+                loaded: totalProgress,
+                total: 1,
+                progress: totalProgress,
+                resource: 'batch'
+            });
+        };
+        
+        // 모든 리소스를 병렬로 로드
+        const promises = resources.map(async ({ src, type, options = {} }) => {
+            const individualOptions: LoadOptions = {
+                ...options,
+                onProgress: (progress) => {
+                    progressMap.set(src, progress.progress);
+                    updateTotalProgress();
+                    options.onProgress?.(progress);
+                }
+            };
+            
+            try {
+                let result: any;
+                switch (type) {
+                    case 'html':
+                        result = await this.html(src, individualOptions);
+                        break;
+                    case 'json':
+                        result = await this.json(src, individualOptions);
+                        break;
+                    case 'script':
+                        await this.script(src, individualOptions);
+                        result = true;
+                        break;
+                    case 'style':
+                        await this.style(src, individualOptions);
+                        result = true;
+                        break;
+                }
+                results.set(src, result);
+            } catch (error) {
+                errors.set(src, error as Error);
+                progressMap.set(src, 1); // 에러여도 진행률은 완료로 처리
+                updateTotalProgress();
+            }
+        });
+        
+        await Promise.allSettled(promises);
+        
+        return {
+            results,
+            errors,
+            totalProgress: {
+                loaded: 1,
+                total: 1,
+                progress: 1,
+                resource: 'batch'
+            }
+        };
     }
 
     /**
-     * URL로부터 HTML 콘텐츠를 가져옵니다.
+     * 리소스 프리로딩을 수행합니다. (렌더링을 블로킹하지 않음)
+     * @param resources - 프리로드할 리소스 목록
      */
-    private async _fetchHtml(src: string): Promise<string> {
-        const response = await fetch(src);
-        if (!response.ok) {
-            throw new Error(`Failed to fetch HTML: ${src} - ${response.statusText}`);
-        }
-        return response.text();
+    public preload(resources: Array<{ src: string; type: 'html' | 'json' | 'script' | 'style' }>): void {
+        resources.forEach(({ src, type }) => {
+            const link = document.createElement('link');
+            link.rel = 'preload';
+            link.href = this._toAbsoluteUrl(src);
+            
+            // 리소스 타입에 따른 as 속성 설정
+            switch (type) {
+                case 'script':
+                    link.as = 'script';
+                    break;
+                case 'style':
+                    link.as = 'style';
+                    break;
+                default:
+                    link.as = 'fetch';
+                    link.crossOrigin = 'anonymous';
+            }
+            
+            document.head.appendChild(link);
+        });
     }
 
     /**
-     * HTML 문자열로부터 단일 HTMLElement를 생성합니다.
+     * 전역 진행률 리스너를 등록합니다.
+     * @param listener - 진행률 콜백 함수
      */
-    private _createElementFromHtml(html: string): HTMLElement {
-        const template = document.createElement('template');
-        template.innerHTML = html.trim();
-        return template.content.firstChild as HTMLElement;
+    public addGlobalProgressListener(listener: (progress: LoadingProgress) => void): void {
+        this.globalProgressListeners.add(listener);
     }
 
     /**
-     * 뷰를 캐시에 저장하고, 캐시 크기가 최대치를 초과하면 오래된 뷰를 제거합니다.
+     * 전역 진행률 리스너를 제거합니다.
+     * @param listener - 제거할 콜백 함수
      */
-    private _cacheView(key: string, entry: CacheEntry): void {
-        this.viewCache.set(key, entry);
-        this.viewUsage.set(key, Date.now());
-        if (this.viewCache.size > this.MAX_VIEWS_IN_CACHE) {
-            this._evictOldestView();
-        }
+    public removeGlobalProgressListener(listener: (progress: LoadingProgress) => void): void {
+        this.globalProgressListeners.delete(listener);
     }
 
     /**
-     * LRU(Least Recently Used) 정책에 따라 가장 오랫동안 사용되지 않은 뷰를 캐시와 DOM에서 제거합니다.
+     * 캐시를 수동으로 정리합니다.
+     * @param maxAge - 이 시간(ms)보다 오래된 캐시 항목 제거
      */
-    private _evictOldestView(): void {
-        let oldestKey: string | null = null;
-        let oldestTime = Infinity;
-
-        // 가장 오래된 뷰 찾기
-        for (const [key, timestamp] of this.viewUsage.entries()) {
-            if (timestamp < oldestTime) {
-                oldestTime = timestamp;
-                oldestKey = key;
+    public clearCache(maxAge?: number): void {
+        const now = Date.now();
+        const threshold = maxAge || 0;
+        
+        // HTML 캐시 정리
+        for (const [key, entry] of this.htmlCache.entries()) {
+            if (now - entry.timestamp > threshold) {
+                this.currentCacheSize -= entry.size;
+                this.htmlCache.delete(key);
             }
         }
+        
+        // JSON 캐시 정리
+        for (const [key, entry] of this.jsonCache.entries()) {
+            if (now - entry.timestamp > threshold) {
+                this.currentCacheSize -= entry.size;
+                this.jsonCache.delete(key);
+            }
+        }
+        
+        console.log(`[Aits Loader] Cache cleared. Current size: ${this._formatBytes(this.currentCacheSize)}`);
+    }
 
-        if (oldestKey) {
-            const entry = this.viewCache.get(oldestKey);
-            // DOM에서 해당 요소 제거
-            entry?.promise.then(element => element?.remove());
-            
-            // 캐시와 사용 기록에서 삭제
-            this.viewCache.delete(oldestKey);
-            this.viewUsage.delete(oldestKey);
-            console.log(`[Aits Loader] Evicted view from cache: ${oldestKey}`);
+    /**
+     * 특정 리소스의 캐시를 무효화합니다.
+     * @param src - 리소스 경로
+     */
+    public invalidate(src: string): void {
+        // HTML 캐시에서 제거
+        const htmlEntry = this.htmlCache.get(src);
+        if (htmlEntry) {
+            this.currentCacheSize -= htmlEntry.size;
+            this.htmlCache.delete(src);
+        }
+        
+        // JSON 캐시에서 제거
+        const jsonEntry = this.jsonCache.get(src);
+        if (jsonEntry) {
+            this.currentCacheSize -= jsonEntry.size;
+            this.jsonCache.delete(src);
         }
     }
 
     /**
-     * 상대 경로를 절대 URL 경로로 변환합니다.
+     * 현재 캐시 상태를 반환합니다.
+     */
+    public getCacheStats(): {
+        size: number;
+        htmlEntries: number;
+        jsonEntries: number;
+        scriptEntries: number;
+        styleEntries: number;
+    } {
+        return {
+            size: this.currentCacheSize,
+            htmlEntries: this.htmlCache.size,
+            jsonEntries: this.jsonCache.size,
+            scriptEntries: this.scriptCache.size,
+            styleEntries: this.styleCache.size
+        };
+    }
+
+    // === Private Helper Methods ===
+
+    /**
+     * fetch API를 사용하여 리소스를 로드하고 진행률을 추적합니다.
+     */
+    private async _fetchWithProgress(
+        src: string,
+        responseType: 'text' | 'json',
+        options: LoadOptions
+    ): Promise<any> {
+        const url = this._toAbsoluteUrl(src);
+        
+        try {
+            const response = await fetch(url, {
+                signal: options.signal,
+                priority: options.priority as RequestPriority
+            });
+            
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+            
+            // Content-Length 헤더 확인
+            const contentLength = response.headers.get('content-length');
+            const total = contentLength ? parseInt(contentLength, 10) : 0;
+            
+            // 진행률 추적이 필요한 경우
+            if (options.onProgress && total > 0 && response.body) {
+                const reader = response.body.getReader();
+                const chunks: Uint8Array[] = [];
+                let loaded = 0;
+                
+                while (true) {
+                    const { done, value } = await reader.read();
+                    
+                    if (done) break;
+                    
+                    chunks.push(value);
+                    loaded += value.length;
+                    
+                    const progress: LoadingProgress = {
+                        loaded,
+                        total,
+                        progress: loaded / total,
+                        resource: src
+                    };
+                    
+                    // 개별 리스너와 전역 리스너 모두 호출
+                    options.onProgress(progress);
+                    this._notifyGlobalListeners(progress);
+                }
+                
+                // 청크들을 합쳐서 최종 데이터 생성
+                const concatenated = new Uint8Array(loaded);
+                let position = 0;
+                for (const chunk of chunks) {
+                    concatenated.set(chunk, position);
+                    position += chunk.length;
+                }
+                
+                const text = new TextDecoder().decode(concatenated);
+                return responseType === 'json' ? JSON.parse(text) : text;
+                
+            } else {
+                // 진행률 추적이 필요없는 경우 단순 처리
+                const result = responseType === 'json' 
+                    ? await response.json() 
+                    : await response.text();
+                
+                if (options.onProgress) {
+                    const progress: LoadingProgress = {
+                        loaded: 1,
+                        total: 1,
+                        progress: 1,
+                        resource: src
+                    };
+                    options.onProgress(progress);
+                    this._notifyGlobalListeners(progress);
+                }
+                
+                return result;
+            }
+            
+        } catch (error) {
+            console.error(`[Aits Loader] Failed to fetch ${src}:`, error);
+            throw error;
+        }
+    }
+
+    /**
+     * 캐시에서 데이터를 가져옵니다.
+     */
+    private _getCached<T>(cache: Map<string, CacheEntry<T>>, key: string): T | null {
+        const entry = cache.get(key);
+        
+        if (!entry) return null;
+        
+        // 캐시 만료 확인
+        if (Date.now() - entry.timestamp > this.MAX_CACHE_AGE) {
+            this.currentCacheSize -= entry.size;
+            cache.delete(key);
+            return null;
+        }
+        
+        // 사용 횟수 증가
+        entry.usage++;
+        
+        return entry.data;
+    }
+
+    /**
+     * 캐시에 데이터를 저장합니다.
+     */
+    private _setCached<T>(cache: Map<string, CacheEntry<T>>, key: string, data: T): void {
+        const size = this._estimateSize(data);
+        
+        // 캐시 크기 제한 확인
+        if (this.currentCacheSize + size > this.MAX_CACHE_SIZE) {
+            this._evictLRU();
+        }
+        
+        const entry: CacheEntry<T> = {
+            data,
+            timestamp: Date.now(),
+            size,
+            usage: 0
+        };
+        
+        // 기존 엔트리가 있다면 크기 차감
+        const existing = cache.get(key);
+        if (existing) {
+            this.currentCacheSize -= existing.size;
+        }
+        
+        cache.set(key, entry);
+        this.currentCacheSize += size;
+    }
+
+    /**
+     * LRU(Least Recently Used) 정책으로 캐시를 정리합니다.
+     */
+    private _evictLRU(): void {
+        const allEntries: Array<[string, CacheEntry<any>, Map<string, CacheEntry<any>>]> = [];
+        
+        // 모든 캐시 엔트리 수집
+        for (const [key, entry] of this.htmlCache.entries()) {
+            allEntries.push([key, entry, this.htmlCache]);
+        }
+        for (const [key, entry] of this.jsonCache.entries()) {
+            allEntries.push([key, entry, this.jsonCache]);
+        }
+        
+        // 사용 횟수와 타임스탬프로 정렬
+        allEntries.sort((a, b) => {
+            const scoreA = a[1].usage + (Date.now() - a[1].timestamp) / 1000;
+            const scoreB = b[1].usage + (Date.now() - b[1].timestamp) / 1000;
+            return scoreA - scoreB;
+        });
+        
+        // 캐시 크기의 20%를 정리
+        const targetSize = this.MAX_CACHE_SIZE * 0.8;
+        while (this.currentCacheSize > targetSize && allEntries.length > 0) {
+            const [key, entry, cache] = allEntries.shift()!;
+            this.currentCacheSize -= entry.size;
+            cache.delete(key);
+        }
+    }
+
+    /**
+     * 데이터의 대략적인 크기를 추정합니다.
+     */
+    private _estimateSize(data: any): number {
+        if (typeof data === 'string') {
+            return data.length * 2; // UTF-16 기준
+        } else if (typeof data === 'object') {
+            return JSON.stringify(data).length * 2;
+        }
+        return 0;
+    }
+
+    /**
+     * 상대 경로를 절대 URL로 변환합니다.
      */
     private _toAbsoluteUrl(src: string): string {
         return new URL(src, window.location.href).href;
+    }
+
+    /**
+     * 바이트를 읽기 쉬운 형식으로 변환합니다.
+     */
+    private _formatBytes(bytes: number): string {
+        if (bytes === 0) return '0 Bytes';
+        const k = 1024;
+        const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
+    }
+
+    /**
+     * 전역 진행률 리스너들에게 알립니다.
+     */
+    private _notifyGlobalListeners(progress: LoadingProgress): void {
+        this.globalProgressListeners.forEach(listener => listener(progress));
+    }
+
+    /**
+     * 주기적인 캐시 정리를 시작합니다.
+     */
+    private _startCacheCleanup(): void {
+        setInterval(() => {
+            this.clearCache(this.MAX_CACHE_AGE);
+        }, 60 * 1000); // 1분마다 실행
     }
 }
