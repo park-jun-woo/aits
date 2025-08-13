@@ -1,22 +1,19 @@
 /**
  * =================================================================
- * AitsElement.ts - AITS 컴포넌트 기반 클래스 (개선된 버전)
+ * AitsElement.ts - AITS 컴포넌트 기반 클래스 (오류 수정 버전)
  * =================================================================
  * @description
- * - 모든 AITS 컴포넌트의 부모 클래스입니다.
- * - Shoelace 스타일의 일관된 API를 제공합니다.
- * - AI가 쉽게 이해하고 생성할 수 있는 패턴을 따릅니다.
+ * - 이벤트 리스너 중복 방지
+ * - 메모리 관리 개선
+ * - 생명주기 정리
+ * - isConnected 속성 충돌 해결
  * @author Aits Framework AI
- * @version 1.0.0
+ * @version 1.1.1
  */
 
-// 컴포넌트 크기 타입
 export type ComponentSize = 'small' | 'medium' | 'large';
-
-// 컴포넌트 변형 타입
 export type ComponentVariant = 'primary' | 'secondary' | 'success' | 'warning' | 'danger' | 'neutral';
 
-// 컴포넌트 상태
 export interface ComponentState {
     loading: boolean;
     disabled: boolean;
@@ -25,24 +22,28 @@ export interface ComponentState {
     initialized: boolean;
 }
 
-// 이벤트 옵션
 export interface AitsEventOptions {
     bubbles?: boolean;
     composed?: boolean;
     cancelable?: boolean;
 }
 
+// 바운드 이벤트 핸들러 정보
+interface BoundHandler {
+    element: Element | Window | Document;
+    eventType: string;
+    handler: EventListener;
+    options?: boolean | AddEventListenerOptions;
+}
+
 export abstract class AitsElement extends HTMLElement {
-    // Shadow DOM 사용 여부 (폼 요소는 false)
     protected useShadowDOM: boolean = true;
     protected shadow: ShadowRoot | null = null;
     
-    // 컴포넌트 데이터
     private _data: any = null;
     private _items: any[] = [];
     private _value: any = null;
     
-    // 컴포넌트 상태
     protected state: ComponentState = {
         loading: false,
         disabled: false,
@@ -51,9 +52,12 @@ export abstract class AitsElement extends HTMLElement {
         initialized: false
     };
     
-    // 이벤트 리스너 관리
+    // 개선된 이벤트 관리
+    private boundHandlers: Map<string, BoundHandler> = new Map();
     private eventListeners: Map<string, Set<EventListener>> = new Map();
     private cleanupFunctions: Set<() => void> = new Set();
+    private renderCount: number = 0;
+    private _isAitsConnected: boolean = false; // isConnected 충돌 방지를 위해 이름 변경
     
     constructor() {
         super();
@@ -65,30 +69,47 @@ export abstract class AitsElement extends HTMLElement {
     // === 생명주기 ===
     
     connectedCallback(): void {
+        if (this._isAitsConnected) return; // 중복 연결 방지
+        this._isAitsConnected = true;
+        
         if (!this.state.initialized) {
             this.initialize();
             this.state.initialized = true;
         }
+        
         this.render();
         this.afterRender();
         this.emit('connected');
     }
     
     disconnectedCallback(): void {
+        if (!this._isAitsConnected) return;
+        this._isAitsConnected = false;
+        
+        this.beforeDisconnect();
         this.cleanup();
         this.emit('disconnected');
     }
     
     attributeChangedCallback(name: string, oldValue: string | null, newValue: string | null): void {
         if (oldValue === newValue) return;
+        
         this.onAttributeChange(name, oldValue, newValue);
-        this.render();
+        
+        // 연결된 상태에서만 재렌더링
+        if (this._isAitsConnected) {
+            this.render();
+        }
     }
     
     // === 초기화 ===
     
     protected initialize(): void {
         // 하위 클래스에서 초기 설정
+    }
+    
+    protected beforeDisconnect(): void {
+        // 하위 클래스에서 연결 해제 전 처리
     }
     
     // === 데이터 관리 ===
@@ -101,7 +122,9 @@ export abstract class AitsElement extends HTMLElement {
         const oldValue = this._data;
         this._data = value;
         this.onDataChange('data', oldValue, value);
-        this.render();
+        if (this._isAitsConnected) {
+            this.render();
+        }
     }
     
     get items(): any[] {
@@ -112,7 +135,9 @@ export abstract class AitsElement extends HTMLElement {
         const oldValue = this._items;
         this._items = value || [];
         this.onDataChange('items', oldValue, value);
-        this.render();
+        if (this._isAitsConnected) {
+            this.render();
+        }
     }
     
     get value(): any {
@@ -129,30 +154,31 @@ export abstract class AitsElement extends HTMLElement {
     // === 렌더링 ===
     
     protected render(): void {
+        if (!this._isAitsConnected) return;
+        
+        this.renderCount++;
         const container = this.shadow || this;
         
-        // 로딩 상태
+        // 기존 이벤트 리스너 정리 (DOM이 교체되기 전)
+        this.cleanupDOMHandlers();
+        
         if (this.state.loading) {
             container.innerHTML = this.getLoadingTemplate();
             return;
         }
         
-        // 에러 상태
         if (this.state.error) {
             container.innerHTML = this.getErrorTemplate(this.state.error);
             return;
         }
         
-        // 빈 상태
         if (this.shouldShowEmpty()) {
             container.innerHTML = this.getEmptyTemplate();
             return;
         }
         
-        // 정상 렌더링
         container.innerHTML = this.getTemplate();
         
-        // 스타일 적용 (Shadow DOM인 경우)
         if (this.shadow) {
             this.applyStyles();
         }
@@ -177,7 +203,7 @@ export abstract class AitsElement extends HTMLElement {
         `;
     }
     
-    // === 템플릿 메서드 (하위 클래스에서 구현) ===
+    // === 템플릿 메서드 ===
     
     protected abstract getTemplate(): string;
     
@@ -255,7 +281,87 @@ export abstract class AitsElement extends HTMLElement {
         return value ? parseFloat(value) : defaultValue;
     }
     
-    // === 이벤트 관리 ===
+    // === 개선된 이벤트 관리 ===
+    
+    /**
+     * 이벤트 리스너 추가 (중복 방지)
+     */
+    protected addEventHandler(
+        element: Element | Window | Document | string,
+        eventType: string,
+        handler: EventListener,
+        options?: boolean | AddEventListenerOptions
+    ): void {
+        const target = typeof element === 'string' 
+            ? (this.shadow || this).querySelector(element)
+            : element;
+            
+        if (!target) return;
+        
+        // 키 생성
+        const key = this.getHandlerKey(target, eventType);
+        
+        // 기존 핸들러가 있으면 제거
+        const existing = this.boundHandlers.get(key);
+        if (existing) {
+            existing.element.removeEventListener(existing.eventType, existing.handler, existing.options);
+        }
+        
+        // 새 핸들러 등록
+        target.addEventListener(eventType, handler, options);
+        this.boundHandlers.set(key, {
+            element: target,
+            eventType,
+            handler,
+            options
+        });
+    }
+    
+    /**
+     * 바운드 메서드로 이벤트 리스너 추가
+     */
+    protected bindEventHandler(
+        element: Element | Window | Document | string,
+        eventType: string,
+        methodName: string,
+        options?: boolean | AddEventListenerOptions
+    ): void {
+        const method = (this as any)[methodName];
+        if (typeof method !== 'function') {
+            console.error(`Method ${methodName} not found`);
+            return;
+        }
+        
+        const boundMethod = method.bind(this);
+        this.addEventHandler(element, eventType, boundMethod, options);
+    }
+    
+    private getHandlerKey(element: Element | Window | Document, eventType: string): string {
+        if (element === window) return `window:${eventType}`;
+        if (element === document) return `document:${eventType}`;
+        if (element instanceof Element) {
+            const id = element.id || element.className || element.tagName;
+            return `${id}:${eventType}`;
+        }
+        return `unknown:${eventType}`;
+    }
+    
+    /**
+     * DOM 핸들러 정리
+     */
+    private cleanupDOMHandlers(): void {
+        this.boundHandlers.forEach((handler, key) => {
+            // window와 document 핸들러는 유지
+            if (!key.startsWith('window:') && !key.startsWith('document:')) {
+                handler.element.removeEventListener(
+                    handler.eventType, 
+                    handler.handler, 
+                    handler.options
+                );
+                this.boundHandlers.delete(key);
+            }
+        });
+    }
     
     protected emit<T = any>(
         eventName: string, 
@@ -307,14 +413,16 @@ export abstract class AitsElement extends HTMLElement {
     public setLoading(loading: boolean): void {
         this.state.loading = loading;
         this.toggleAttribute('loading', loading);
-        this.render();
+        if (this._isAitsConnected) {
+            this.render();
+        }
     }
     
     public setDisabled(disabled: boolean): void {
         this.state.disabled = disabled;
         this.toggleAttribute('disabled', disabled);
+        
         if (!this.useShadowDOM) {
-            // Light DOM 요소들도 비활성화
             this.querySelectorAll('input, button, select, textarea').forEach(el => {
                 (el as HTMLInputElement).disabled = disabled;
             });
@@ -324,7 +432,9 @@ export abstract class AitsElement extends HTMLElement {
     public setError(error: string | null): void {
         this.state.error = error;
         this.toggleAttribute('error', !!error);
-        this.render();
+        if (this._isAitsConnected) {
+            this.render();
+        }
     }
     
     // === DOM 쿼리 헬퍼 ===
@@ -379,6 +489,16 @@ export abstract class AitsElement extends HTMLElement {
     // === 정리 ===
     
     protected cleanup(): void {
+        // 모든 바운드 핸들러 제거
+        this.boundHandlers.forEach(handler => {
+            handler.element.removeEventListener(
+                handler.eventType, 
+                handler.handler, 
+                handler.options
+            );
+        });
+        this.boundHandlers.clear();
+        
         // 이벤트 리스너 제거
         this.eventListeners.forEach((handlers, eventType) => {
             handlers.forEach(handler => {
@@ -388,7 +508,13 @@ export abstract class AitsElement extends HTMLElement {
         this.eventListeners.clear();
         
         // 정리 함수 실행
-        this.cleanupFunctions.forEach(cleanup => cleanup());
+        this.cleanupFunctions.forEach(cleanup => {
+            try {
+                cleanup();
+            } catch (e) {
+                console.error('[AitsElement] Cleanup error:', e);
+            }
+        });
         this.cleanupFunctions.clear();
     }
     

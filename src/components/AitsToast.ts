@@ -1,13 +1,20 @@
+/**
+ * =================================================================
+ * AitsToast.ts - 토스트 알림 컴포넌트 (개선된 버전)
+ * =================================================================
+ * @description
+ * - 타이머 관리 개선
+ * - 생명주기 중복 호출 방지
+ * @author Aits Framework AI
+ * @version 1.1.0
+ */
+
 import { AitsElement } from './AitsElement';
 
-/**
- * AitsToast - 토스트 알림 컴포넌트 (개선된 버전)
- * <div is="aits-toast">
- * 타이머 정리가 강화된 버전
- */
 export class AitsToast extends AitsElement {
     private autoCloseTimer: number | null = null;
     private animationTimer: number | null = null;
+    private isClosing: boolean = false;
     
     static get observedAttributes() {
         return ['variant', 'position', 'duration', 'closable'];
@@ -134,22 +141,21 @@ export class AitsToast extends AitsElement {
     }
     
     protected afterRender(): void {
-        const closeBtn = this.$('.toast-close') as HTMLButtonElement;
-        if (closeBtn) {
-            closeBtn.addEventListener('click', () => {
-                this.close();
-            });
-        }
+        // 이벤트 핸들러를 중복 방지 방식으로 등록
+        this.bindEventHandler('.toast-close', 'click', 'handleCloseClick');
         
         // 자동 닫기 설정
         this.setupAutoClose();
+    }
+    
+    private handleCloseClick = (): void => {
+        this.close();
     }
     
     /**
      * 자동 닫기 설정
      */
     private setupAutoClose(): void {
-        // 기존 타이머 정리
         this.clearTimers();
         
         const duration = this.getNumberAttr('duration', 5000);
@@ -179,17 +185,19 @@ export class AitsToast extends AitsElement {
      * 토스트 닫기
      */
     public close(): void {
-        // 타이머 정리
+        if (this.isClosing) return; // 중복 닫기 방지
+        this.isClosing = true;
+        
         this.clearTimers();
         
-        // 닫기 이벤트 발생
         const cancelled = !this.emit('closing', {}, { cancelable: true });
-        if (cancelled) return;
+        if (cancelled) {
+            this.isClosing = false;
+            return;
+        }
         
-        // 애니메이션 적용
         this.style.animation = 'fadeOut 0.3s ease forwards';
         
-        // 애니메이션 완료 후 제거
         this.animationTimer = window.setTimeout(() => {
             this.emit('closed');
             this.remove();
@@ -197,25 +205,10 @@ export class AitsToast extends AitsElement {
     }
     
     /**
-     * 연결 해제 시 정리
+     * 연결 해제 전 처리
      */
-    disconnectedCallback(): void {
-        // 모든 타이머 정리
+    protected beforeDisconnect(): void {
         this.clearTimers();
-        
-        // 부모 클래스의 disconnectedCallback 호출
-        super.disconnectedCallback();
-    }
-    
-    /**
-     * 파괴 시 정리
-     */
-    public destroy(): void {
-        // 타이머 정리
-        this.clearTimers();
-        
-        // 부모 클래스의 destroy 호출
-        super.destroy();
     }
     
     /**
@@ -241,37 +234,22 @@ export class AitsToast extends AitsElement {
         return toast as AitsToast;
     }
     
-    /**
-     * 정적 메서드: 성공 토스트
-     */
     public static success(message: string, options?: Omit<Parameters<typeof AitsToast.show>[1], 'variant'>): AitsToast {
         return this.show(message, { ...options, variant: 'success' });
     }
     
-    /**
-     * 정적 메서드: 에러 토스트
-     */
     public static error(message: string, options?: Omit<Parameters<typeof AitsToast.show>[1], 'variant'>): AitsToast {
         return this.show(message, { ...options, variant: 'error' });
     }
     
-    /**
-     * 정적 메서드: 경고 토스트
-     */
     public static warning(message: string, options?: Omit<Parameters<typeof AitsToast.show>[1], 'variant'>): AitsToast {
         return this.show(message, { ...options, variant: 'warning' });
     }
     
-    /**
-     * 정적 메서드: 정보 토스트
-     */
     public static info(message: string, options?: Omit<Parameters<typeof AitsToast.show>[1], 'variant'>): AitsToast {
         return this.show(message, { ...options, variant: 'info' });
     }
     
-    /**
-     * 정적 메서드: 모든 토스트 닫기
-     */
     public static closeAll(): void {
         const toasts = document.querySelectorAll('[is="aits-toast"]');
         toasts.forEach(toast => {

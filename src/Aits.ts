@@ -1,23 +1,33 @@
 /**
  * =================================================================
- * Aits.ts - Aits 프레임워크의 중앙 관제 센터 (Hydrator 통합 버전)
+ * Aits.ts - Aits 프레임워크의 중앙 관제 센터 (완전한 개선 버전)
  * =================================================================
  * @description
- * - 프레임워크의 전체 생명주기, 라우팅, 컨트롤러 관리를 담당합니다.
- * - SSR to SPA Hydration 기능이 통합되었습니다.
- * - 메모리 관리, 에러 처리, 라우터 초기화가 개선되었습니다.
+ * - Controller 캐싱 메모리 관리 개선
+ * - 순환 참조 문제 해결
+ * - 에러 처리 강화
+ * - TypeScript 타입 오류 수정
  * @author Aits Framework AI
- * @version 0.4.0
+ * @version 0.5.2
  */
 
 import Navigo from 'navigo';
-import { Loader, LoadOptions } from './Loader';
-import { Context } from './Context';
-import { Controller } from './Controller';
-import { Model } from './Model';
-import { Renderer, LayoutConfig, TransitionOptions, Transition } from './Renderer';
-import { IApiAdapter, DefaultApiAdapter } from './ApiAdapter';
-import { Hydrator, HydrationOptions, HydrationResult } from './Hydrator';
+import type { Loader, LoadOptions } from './Loader';
+import type { Context } from './Context';
+import type { Controller } from './Controller';
+import type { Model } from './Model';
+import type { Renderer, LayoutConfig, TransitionOptions, Transition } from './Renderer';
+import type { IApiAdapter } from './ApiAdapter';
+import { DefaultApiAdapter } from './ApiAdapter';
+import type { Hydrator, HydrationOptions, HydrationResult } from './Hydrator';
+
+// Controller 캐시 엔트리
+interface ControllerCacheEntry {
+    promise: Promise<Controller>;
+    lastAccessed: number;
+    refCount: number;
+    initialized: boolean;
+}
 
 // 라우팅 규칙을 정의하기 위한 타입
 export interface RouteDefinition {
@@ -37,75 +47,263 @@ export interface ModelRegistration {
 export interface RunOptions {
     autoHydrate?: boolean;
     hydrationOptions?: HydrationOptions;
+    controllerCacheSize?: number;  // 컨트롤러 캐시 크기
+    controllerCacheTTL?: number;   // 컨트롤러 캐시 TTL (ms)
+}
+
+// Error Boundary 유틸리티
+class ErrorBoundary {
+    static async wrap<T>(
+        fn: () => Promise<T>, 
+        errorHandler?: (error: Error) => void
+    ): Promise<T | null> {
+        try {
+            return await fn();
+        } catch (error) {
+            const err = error instanceof Error ? error : new Error(String(error));
+            console.error('[Aits Error]', err);
+            errorHandler?.(err);
+            return null;
+        }
+    }
 }
 
 export class Aits {
     private navigator: Navigo;
-    private loader: Loader;
-    private renderer: Renderer;
-    private hydrator: Hydrator;
+    private _loader?: Loader;
+    private _renderer?: Renderer;
+    private _hydrator?: Hydrator;
     public apiAdapter: IApiAdapter;
     
-    // 컨트롤러 관리
-    private controllers: Map<string, Promise<Controller>>;
+    // 개선된 컨트롤러 캐시 관리
+    private controllerCache: Map<string, ControllerCacheEntry>;
+    private readonly MAX_CACHE_SIZE: number;
+    private readonly CACHE_TTL: number;
+    private cacheCleanupInterval: number | null = null;
     private activeController: Controller | null;
     
-    // 모델 관리 - 통합된 단일 Map으로 관리
+    // 모델 관리
     private models: Map<string, ModelRegistration>;
     
     // 프레임워크 상태
     private isRunning: boolean;
     private routeDefinitions: RouteDefinition[];
-    private isRouterInitialized: boolean = false;  // 라우터 초기화 상태
+    private isRouterInitialized: boolean = false;
     
     // Hydration 관련 상태
     private hydrationMode: 'none' | 'auto' | 'manual' | 'partial' = 'none';
     private hydrationResult: HydrationResult | null = null;
 
-    public constructor() {
-        // 기본 초기화
-        this.loader = new Loader(this);
-        this.renderer = new Renderer(this);
-        this.hydrator = new Hydrator(this);
-        this.apiAdapter = new DefaultApiAdapter();
+    public constructor(options: RunOptions = {}) {
+        // 캐시 설정
+        this.MAX_CACHE_SIZE = options.controllerCacheSize || 10;
+        this.CACHE_TTL = options.controllerCacheTTL || 5 * 60 * 1000; // 5분
         
-        this.controllers = new Map();
+        // 초기화
+        this.apiAdapter = new DefaultApiAdapter();
+        this.controllerCache = new Map();
         this.models = new Map();
         this.activeController = null;
         this.isRunning = false;
         this.routeDefinitions = [];
 
-        // Navigator 초기화 (라우트 설정 전)
+        // Navigator 초기화
         this.navigator = new Navigo('/');
         
-        // 브라우저 뒤로가기/앞으로가기 처리 (훅만 설정)
-        this.navigator.hooks({
-            before: (done) => {
-                // 라우트 변경 전 처리
-                this.beforeRouteChange()
-                    .then(() => done())
-                    .catch((err) => {
-                        console.error('[Aits] Route change cancelled:', err);
-                        // 라우트 변경 취소
-                    });
-            },
-            after: () => {
-                // 라우트 변경 후 처리
-                this.afterRouteChange();
-            }
-        });
+        // 라우터 훅 설정
+        this.setupNavigatorHooks();
         
         // 글로벌 에러 핸들러 설정
         this.setupGlobalErrorHandler();
+        
+        // 캐시 정리 인터벌 시작
+        this.startCacheCleanup();
+    }
+    
+    // Lazy loading getters for circular dependency prevention
+    public get loader(): Loader {
+        if (!this._loader) {
+            const { Loader } = require('./Loader');
+            this._loader = new Loader(this);
+        }
+        return this._loader;
+    }
+    
+    public get renderer(): Renderer {
+        if (!this._renderer) {
+            const { Renderer } = require('./Renderer');
+            this._renderer = new Renderer(this);
+        }
+        return this._renderer;
+    }
+    
+    public get hydrator(): Hydrator {
+        if (!this._hydrator) {
+            const { Hydrator } = require('./Hydrator');
+            this._hydrator = new Hydrator(this);
+        }
+        return this._hydrator;
     }
     
     /**
-     * 라우터 초기화 완료 (모든 라우트 설정 후 호출)
+     * 라우터 훅 설정
+     */
+    private setupNavigatorHooks(): void {
+        this.navigator.hooks({
+            before: async (done) => {
+                const canProceed = await ErrorBoundary.wrap(
+                    () => this.beforeRouteChange(),
+                    () => done()
+                );
+                
+                if (canProceed !== false) {
+                    done();
+                }
+            },
+            after: () => {
+                this.afterRouteChange();
+            }
+        });
+    }
+    
+    /**
+     * 컨트롤러 캐시 정리 시작
+     */
+    private startCacheCleanup(): void {
+        this.cacheCleanupInterval = window.setInterval(() => {
+            this.cleanupControllerCache();
+        }, 60 * 1000); // 1분마다
+    }
+    
+    /**
+     * 컨트롤러 캐시 정리 (LRU + TTL)
+     */
+    private cleanupControllerCache(): void {
+        const now = Date.now();
+        const entriesToDelete: string[] = [];
+        
+        // TTL 체크
+        this.controllerCache.forEach((entry, path) => {
+            if (now - entry.lastAccessed > this.CACHE_TTL && entry.refCount === 0) {
+                entriesToDelete.push(path);
+            }
+        });
+        
+        // 캐시 크기 체크 (LRU)
+        if (this.controllerCache.size > this.MAX_CACHE_SIZE) {
+            const sortedEntries = Array.from(this.controllerCache.entries())
+                .filter(([, entry]) => entry.refCount === 0)
+                .sort((a, b) => a[1].lastAccessed - b[1].lastAccessed);
+            
+            const toRemove = sortedEntries.slice(0, sortedEntries.length - this.MAX_CACHE_SIZE);
+            toRemove.forEach(([path]) => entriesToDelete.push(path));
+        }
+        
+        // 삭제 실행
+        for (const path of entriesToDelete) {
+            const entry = this.controllerCache.get(path);
+            if (entry) {
+                entry.promise.then(controller => {
+                    if ('cleanup' in controller) {
+                        (controller as any).cleanup();
+                    }
+                }).catch(() => {});
+                this.controllerCache.delete(path);
+            }
+        }
+        
+        if (entriesToDelete.length > 0) {
+            console.log(`[Aits] Cleaned up ${entriesToDelete.length} cached controllers`);
+        }
+    }
+    
+    /**
+     * 개선된 컨트롤러 가져오기
+     */
+    private async getController(controllerPath: string): Promise<Controller> {
+        let entry = this.controllerCache.get(controllerPath);
+        
+        if (entry) {
+            entry.lastAccessed = Date.now();
+            entry.refCount++;
+            
+            try {
+                const controller = await entry.promise;
+                return controller;
+            } finally {
+                entry.refCount--;
+            }
+        }
+        
+        // 새로운 컨트롤러 로드
+        const promise = this.loadController(controllerPath);
+        entry = {
+            promise,
+            lastAccessed: Date.now(),
+            refCount: 1,
+            initialized: false
+        };
+        
+        this.controllerCache.set(controllerPath, entry);
+        
+        try {
+            const controller = await promise;
+            entry.initialized = true;
+            return controller;
+        } catch (error) {
+            // 실패한 엔트리 제거
+            this.controllerCache.delete(controllerPath);
+            throw error;
+        } finally {
+            entry.refCount--;
+        }
+    }
+    
+    /**
+     * 컨트롤러 로드
+     */
+    private async loadController(controllerPath: string): Promise<Controller> {
+        const result = await ErrorBoundary.wrap(async () => {
+            const module = await import(/* @vite-ignore */ controllerPath);
+            const ControllerClass = module.default;
+            
+            if (typeof ControllerClass !== 'function') {
+                throw new Error('Controller module must export a class as default');
+            }
+            
+            const controller = new ControllerClass(this);
+            const { Context } = await import('./Context');
+            const context = new Context(this);
+
+            // 생명주기 실행
+            if (typeof controller.required === 'function') {
+                const resources = controller.required(context);
+                if (Array.isArray(resources)) {
+                    await Promise.all(resources);
+                }
+            }
+
+            if (typeof controller.onLoad === 'function') {
+                await controller.onLoad(context);
+            }
+            
+            controller.setInitialized(true);
+            return controller;
+        });
+        
+        if (!result) {
+            throw new Error(`Failed to load controller: ${controllerPath}`);
+        }
+        
+        return result;
+    }
+    
+    /**
+     * 라우터 초기화 완료
      */
     private initializeRouter(): void {
         if (this.isRouterInitialized) return;
         
-        // 404 핸들러 정의 (라우트 설정 후)
         this.navigator.notFound(() => {
             this.handle404();
         });
@@ -116,18 +314,18 @@ export class Aits {
     /**
      * 라우트 변경 전 처리
      */
-    private async beforeRouteChange(): Promise<void> {
-        // 현재 컨트롤러의 canLeave 체크
+    private async beforeRouteChange(): Promise<boolean> {
         if (this.activeController) {
             const controller = this.activeController as any;
             if (typeof controller.canLeave === 'function') {
+                const { Context } = await import('./Context');
                 const canLeave = await controller.canLeave(new Context(this));
                 if (!canLeave) {
-                    // 라우트 변경 취소
-                    throw new Error('Route change cancelled by canLeave guard');
+                    return false;
                 }
             }
         }
+        return true;
     }
     
     /**
@@ -135,11 +333,8 @@ export class Aits {
      */
     private afterRouteChange(): void {
         this.updatePageLinks();
-        
-        // 스크롤 위치 초기화
         window.scrollTo(0, 0);
         
-        // 라우트 변경 이벤트 발생
         document.dispatchEvent(new CustomEvent('aits:route-changed', {
             detail: { route: this.getCurrentRoute() },
             bubbles: true
@@ -164,39 +359,33 @@ export class Aits {
     /**
      * 글로벌 에러 처리
      */
-    private handleGlobalError(error: any): void {
-        // 현재 컨트롤러의 onError 호출
+    private async handleGlobalError(error: any): Promise<void> {
         if (this.activeController) {
-            const controller = this.activeController as any;
-            if (typeof controller.onError === 'function') {
-                try {
-                    controller.onError(error, new Context(this));
-                } catch (e) {
-                    console.error('[Aits] Error in controller.onError:', e);
+            await ErrorBoundary.wrap(async () => {
+                const controller = this.activeController as any;
+                if (typeof controller.onError === 'function') {
+                    const { Context } = await import('./Context');
+                    await controller.onError(error, new Context(this));
                 }
-            }
+            });
         }
         
-        // 사용자에게 에러 표시 (Toast 사용 가능한 경우)
         if (typeof (window as any).AitsToast !== 'undefined') {
             (window as any).AitsToast.error('An error occurred. Please try again.');
         }
     }
 
     /**
-     * 404 에러 처리 (개선된 버전)
+     * 404 에러 처리
      */
     private handle404(): void {
         console.error('[Aits] 404 Not Found: The requested route does not exist.');
         
-        // 404 컨트롤러가 정의되어 있는지 확인
         const has404Route = this.routeDefinitions.some(r => r.path === '/404');
         
         if (has404Route) {
-            // 404 라우트로 리다이렉트
             this.navigate('/404');
         } else {
-            // 기본 404 페이지 렌더링
             this.renderDefault404Page();
         }
     }
@@ -387,8 +576,8 @@ export class Aits {
         
         // 경로가 있으면 동적 로드
         if (registration.path) {
-            try {
-                const module = await import(/* @vite-ignore */ registration.path);
+            const result = await ErrorBoundary.wrap(async () => {
+                const module = await import(/* @vite-ignore */ registration.path!);
                 const ModelClass = module.default;
                 
                 if (typeof ModelClass !== 'function') {
@@ -402,10 +591,13 @@ export class Aits {
                 registration.loaded = true;
                 
                 return modelInstance as T;
-            } catch (err) {
-                console.error(`[Aits] Failed to load model '${name}' from path '${registration.path}':`, err);
-                throw err;
+            });
+            
+            if (!result) {
+                throw new Error(`Failed to load model '${name}'`);
             }
+            
+            return result;
         }
         
         throw new Error(`[Aits] Model '${name}' has no valid instance or path.`);
@@ -436,7 +628,7 @@ export class Aits {
      * @param path - 라우팅 설정 파일의 경로
      */
     public async routes(path: string): Promise<void> {
-        try {
+        const result = await ErrorBoundary.wrap(async () => {
             const module = await import(/* @vite-ignore */ path);
             const definitions: RouteDefinition[] = module.default;
 
@@ -461,21 +653,22 @@ export class Aits {
             }
             
             console.log(`[Aits] Loaded ${definitions.length} routes from ${path}`);
-        } catch (err) {
-            console.error(`[Aits] Error loading routes from ${path}:`, err);
-            throw err;
+        });
+        
+        if (!result) {
+            throw new Error(`Failed to load routes from ${path}`);
         }
     }
 
     /**
-     * 단일 라우팅 규칙을 추가합니다. (개선된 버전)
+     * 단일 라우팅 규칙을 추가합니다.
      * @param path - URL 경로
      * @param controllerPath - 컨트롤러 파일 경로
      * @param methodName - 실행할 메소드 이름
      */
     public addRoute(path: string, controllerPath: string, methodName: string): void {
         this.navigator.on(path, async (match) => {
-            try {
+            await ErrorBoundary.wrap(async () => {
                 // 이전 컨트롤러 정리
                 await this.cleanupActiveController();
 
@@ -483,6 +676,7 @@ export class Aits {
                 const controller = await this.getController(controllerPath);
                 
                 // Context 생성
+                const { Context } = await import('./Context');
                 const context = new Context(this, match);
                 
                 // 활성 컨트롤러 설정
@@ -511,83 +705,11 @@ export class Aits {
                 } else {
                     throw new Error(`Method '${methodName}' not found in controller`);
                 }
-            } catch (err) {
-                console.error(`[Aits] Error processing route '${path}':`, err);
-                
-                // 에러 처리
-                if (this.activeController) {
-                    const controllerAny = this.activeController as any;
-                    if (typeof controllerAny.onError === 'function') {
-                        try {
-                            await controllerAny.onError(err, new Context(this, match));
-                        } catch (e) {
-                            console.error('[Aits] Error in controller.onError:', e);
-                        }
-                    }
-                }
-                
-                // 404 페이지로 이동
+            }, (error) => {
+                console.error(`[Aits] Error processing route '${path}':`, error);
                 this.handle404();
-            }
+            });
         });
-    }
-
-    // === 컨트롤러 관리 ===
-
-    /**
-     * 컨트롤러를 가져옵니다. (캐시 사용)
-     * @param controllerPath - 컨트롤러 파일 경로
-     */
-    private async getController(controllerPath: string): Promise<Controller> {
-        // 캐시 확인
-        let controllerPromise = this.controllers.get(controllerPath);
-        
-        if (!controllerPromise) {
-            controllerPromise = this.loadController(controllerPath);
-            this.controllers.set(controllerPath, controllerPromise);
-        }
-        
-        return controllerPromise;
-    }
-
-    /**
-     * 컨트롤러를 로드하고 초기화합니다.
-     * @param controllerPath - 컨트롤러 파일 경로
-     */
-    private async loadController(controllerPath: string): Promise<Controller> {
-        try {
-            const module = await import(/* @vite-ignore */ controllerPath);
-            const ControllerClass = module.default;
-            
-            if (typeof ControllerClass !== 'function') {
-                throw new Error('Controller module must export a class as default');
-            }
-            
-            const controller = new ControllerClass(this);
-            const context = new Context(this);
-
-            // 생명주기 1: required - 필수 리소스 로드
-            if (typeof controller.required === 'function') {
-                const resources = controller.required(context);
-                if (Array.isArray(resources)) {
-                    await Promise.all(resources);
-                }
-            }
-
-            // 생명주기 2: onLoad - 최초 1회 실행
-            if (typeof controller.onLoad === 'function') {
-                await controller.onLoad(context);
-            }
-            
-            // 초기화 완료 표시
-            controller.setInitialized(true);
-            
-            return controller;
-        } catch (err) {
-            console.error(`[Aits] Failed to load controller: ${controllerPath}`, err);
-            this.controllers.delete(controllerPath);
-            throw err;
-        }
     }
 
     /**
@@ -595,12 +717,9 @@ export class Aits {
      */
     private async cleanupActiveController(): Promise<void> {
         if (this.activeController) {
-            try {
-                // cleanup 메서드 호출 (자동 정리 포함)
-                await this.activeController.cleanup();
-            } catch (err) {
-                console.error('[Aits] Error cleaning up controller:', err);
-            }
+            await ErrorBoundary.wrap(async () => {
+                await this.activeController!.cleanup();
+            });
         }
         this.activeController = null;
     }
@@ -646,7 +765,7 @@ export class Aits {
     }
 
     /**
-     * 프레임워크를 중지합니다. (개선된 버전)
+     * 프레임워크를 중지합니다.
      */
     public async stop(): Promise<void> {
         if (!this.isRunning) return;
@@ -657,31 +776,52 @@ export class Aits {
         await this.cleanupActiveController();
         
         // 모든 컨트롤러 캐시 정리
-        this.controllers.clear();
+        for (const entry of this.controllerCache.values()) {
+            await ErrorBoundary.wrap(async () => {
+                const controller = await entry.promise;
+                if ('cleanup' in controller) {
+                    await (controller as any).cleanup();
+                }
+            });
+        }
+        this.controllerCache.clear();
+        
+        // 캐시 정리 인터벌 중지
+        if (this.cacheCleanupInterval) {
+            clearInterval(this.cacheCleanupInterval);
+            this.cacheCleanupInterval = null;
+        }
         
         // 모든 모델 정리
-        this.models.forEach((registration) => {
+        for (const registration of this.models.values()) {
             if (registration.instance && 'destroy' in registration.instance) {
-                try {
-                    (registration.instance as any).destroy();
-                } catch (err) {
-                    console.error('[Aits] Error destroying model:', err);
-                }
+                await ErrorBoundary.wrap(async () => {
+                    await (registration.instance as any).destroy();
+                });
             }
-        });
+        }
         this.models.clear();
         
         // 네비게이터 정리
         this.navigator.destroy();
         
         // 로더 정리
-        this.loader.destroy();
+        if (this._loader) {
+            this._loader.destroy();
+            this._loader = undefined;
+        }
         
         // 렌더러 정리
-        this.renderer.destroy();
+        if (this._renderer) {
+            this._renderer.destroy();
+            this._renderer = undefined;
+        }
         
         // Hydrator 정리
-        this.hydrator.destroy();
+        if (this._hydrator) {
+            this._hydrator.destroy();
+            this._hydrator = undefined;
+        }
         
         this.isRunning = false;
         this.isRouterInitialized = false;
@@ -830,7 +970,7 @@ export class Aits {
             isHydrated: this.isHydrated(),
             hydrationMode: this.hydrationMode,
             activeRoute: this.getCurrentRoute(),
-            controllerCount: this.controllers.size,
+            controllerCount: this.controllerCache.size,
             modelCount: this.models.size,
             routeCount: this.routeDefinitions.length
         };
@@ -844,7 +984,7 @@ export class Aits {
         console.table(this.getStatus());
         console.log('Routes:', this.routeDefinitions);
         console.log('Models:', Array.from(this.models.keys()));
-        console.log('Controllers:', Array.from(this.controllers.keys()));
+        console.log('Controllers:', Array.from(this.controllerCache.keys()));
         console.log('Cache Stats:', this.loader.getCacheStats());
         
         if (this.hydrationResult) {
@@ -852,5 +992,12 @@ export class Aits {
         }
         
         console.groupEnd();
+    }
+    
+    /**
+     * 파괴자
+     */
+    public destroy(): void {
+        this.stop();
     }
 }
