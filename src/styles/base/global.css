@@ -1,0 +1,40 @@
+/* src/styles/base/global.css */
+/* Aits Global Styles */
+@layer aits.base {
+  body {
+    font-family: var(--aits-font-sans);
+    color: var(--aits-color-neutral-900);
+    background-color: var(--aits-color-neutral-50);
+  }
+  
+  /* Focus 스타일 */
+  :focus-visible {
+    outline: 2px solid var(--aits-color-primary);
+    outline-offset: 2px;
+  }
+  
+  /* 선택 영역 스타일 */
+  ::selection {
+    background-color: var(--aits-color-primary);
+    color: white;
+  }
+  
+  /* 스크롤바 스타일 */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  
+  ::-webkit-scrollbar-track {
+    background: var(--aits-color-neutral-100);
+  }
+  
+  ::-webkit-scrollbar-thumb {
+    background: var(--aits-color-neutral-400);
+    border-radius: var(--aits-radius-full);
+  }
+  
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--aits-color-neutral-500);
+  }
+}

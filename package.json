@@ -29,9 +29,12 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "fast-glob": "^3.3.3",
+    "glob": "^11.0.3",
     "navigo": "^8.11.1"
   },
   "devDependencies": {
+    "@types/glob": "^8.1.0",
     "@types/node": "^20.0.0",
     "typescript": "^5.2.2",
     "vite": "^5.4.19"
