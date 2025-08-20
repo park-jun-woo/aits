@@ -53,6 +53,8 @@ export { AitsProgress } from './AitsProgress';
 export { AitsEmpty } from './AitsEmpty';
 export { AitsError } from './AitsError';
 
+export { NHNTOASTUIEditor } from './NHNTOASTUIEditor';
+
 // 컴포넌트 레지스트리 맵
 import { AitsList } from './AitsList';
 import { AitsArticle } from './AitsArticle';
@@ -76,6 +78,7 @@ import { AitsProgress } from './AitsProgress';
 import { AitsEmpty } from './AitsEmpty';
 import { AitsError } from './AitsError';
 import { AitsElement } from './AitsElement';
+import { NHNTOASTUIEditor } from './NHNTOASTUIEditor';
 
 // 컴포넌트 생성자 타입 정의
 type ComponentConstructor = new () => AitsElement;
@@ -116,6 +119,18 @@ export const COMPONENT_REGISTRY = new Map<string, ComponentConstructor>([
     ['aits-error', AitsError as ComponentConstructor]
 ]);
 
+export const EXTERNAL_WRAPPER_COMPONENTS  = {
+    'toastui-editor': {
+        name: 'TOAST UI Editor',
+        library: '@toast-ui/editor',
+        cdnUrl: 'https://uicdn.toast.com/editor/latest/',
+        component: NHNTOASTUIEditor,
+        type: 'editor',
+        async: true,
+        autoRegister: true
+    },
+};
+
 /**
  * 컴포넌트 타입별 그룹화
  */
@@ -149,7 +164,8 @@ export const COMPONENT_GROUPS = {
         'aits-progress',
         'aits-empty',
         'aits-error'
-    ]
+    ],
+    external: Object.keys(EXTERNAL_WRAPPER_COMPONENTS)
 };
 
 /**
@@ -317,23 +333,41 @@ export class ComponentUtils {
     }
     
     /**
-     * 컴포넌트가 활성화 가능한지 확인
-     */
-    static isComponentAvailable(isValue: string): boolean {
-        return COMPONENT_REGISTRY.has(isValue);
-    }
-    
-    /**
-     * 모든 사용 가능한 컴포넌트 목록
-     */
-    static getAvailableComponents(): string[] {
-        return Array.from(COMPONENT_REGISTRY.keys());
-    }
-    
-    /**
      * 특정 그룹의 컴포넌트 목록
      */
     static getComponentsByGroup(group: keyof typeof COMPONENT_GROUPS): string[] {
         return COMPONENT_GROUPS[group] || [];
+    }
+
+    /**
+     * 외부 래퍼 컴포넌트인지 확인
+     */
+    static isExternalWrapper(isValue: string): boolean {
+        return isValue in EXTERNAL_WRAPPER_COMPONENTS;
+    }
+    
+    /**
+     * 외부 래퍼 컴포넌트 정보 가져오기
+     */
+    static getExternalWrapperInfo(isValue: string) {
+        return EXTERNAL_WRAPPER_COMPONENTS[isValue as keyof typeof EXTERNAL_WRAPPER_COMPONENTS];
+    }
+    
+    /**
+     * 컴포넌트가 사용 가능한지 확인 (수정)
+     */
+    static isComponentAvailable(isValue: string): boolean {
+        return COMPONENT_REGISTRY.has(isValue) || 
+               this.isExternalWrapper(isValue);
+    }
+    
+    /**
+     * 모든 사용 가능한 컴포넌트 목록 (수정)
+     */
+    static getAvailableComponents(): string[] {
+        return [
+            ...Array.from(COMPONENT_REGISTRY.keys()),
+            ...Object.keys(EXTERNAL_WRAPPER_COMPONENTS)
+        ];
     }
 }

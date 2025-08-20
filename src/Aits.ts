@@ -126,7 +126,7 @@ export class Aits {
             const { Loader } = require('./Loader');
             this._loader = new Loader(this);
         }
-        return this._loader;
+        return this._loader!;
     }
     
     public get renderer(): Renderer {
@@ -134,7 +134,7 @@ export class Aits {
             const { Renderer } = require('./Renderer');
             this._renderer = new Renderer(this);
         }
-        return this._renderer;
+        return this._renderer!;
     }
     
     public get hydrator(): Hydrator {
@@ -142,7 +142,7 @@ export class Aits {
             const { Hydrator } = require('./Hydrator');
             this._hydrator = new Hydrator(this);
         }
-        return this._hydrator;
+        return this._hydrator!;
     }
     
     /**
