@@ -116,7 +116,10 @@ export const COMPONENT_REGISTRY = new Map<string, ComponentConstructor>([
     ['aits-modal', AitsModal as ComponentConstructor],
     ['aits-progress', AitsProgress as ComponentConstructor],
     ['aits-empty', AitsEmpty as ComponentConstructor],
-    ['aits-error', AitsError as ComponentConstructor]
+    ['aits-error', AitsError as ComponentConstructor],
+
+    // 외부 래퍼 컴포넌트 추가
+    ['toastui-editor', NHNTOASTUIEditor as ComponentConstructor],
 ]);
 
 export const EXTERNAL_WRAPPER_COMPONENTS  = {
@@ -200,7 +203,10 @@ export const SEMANTIC_TAGS: Record<string, string[]> = {
     'aits-modal': ['dialog', 'div'],
     'aits-progress': ['div', 'progress'],
     'aits-empty': ['div'],
-    'aits-error': ['div']
+    'aits-error': ['div'],
+
+    // 외부 컴포넌트
+    'toastui-editor': ['div', 'aits-editor'], 
 };
 
 /**
@@ -282,18 +288,20 @@ export class ComponentUtils {
      */
     static registerAll(): void {
         COMPONENT_REGISTRY.forEach((ComponentClass, isValue) => {
-            // Web Components는 '-'를 포함해야 함
             if (isValue.includes('-')) {
                 try {
-                    // 이미 등록되었는지 확인
                     if (!customElements.get(isValue)) {
-                        // Customized built-in elements 방식
-                        // 각 컴포넌트의 기본 태그 찾기
                         const validTags = SEMANTIC_TAGS[isValue];
                         if (validTags && validTags.length > 0) {
                             const baseTag = validTags[0];
-                            // ComponentClass는 이미 구체적인 클래스이므로 안전하게 전달
-                            customElements.define(isValue, ComponentClass as CustomElementConstructor, { extends: baseTag });
+                            
+                            // 외부 래퍼 컴포넌트는 autonomous custom element로 등록
+                            if (ComponentUtils.isExternalWrapper(isValue)) {
+                                customElements.define(isValue, ComponentClass as CustomElementConstructor);
+                            } else {
+                                // 기존 AITS 컴포넌트는 customized built-in element로 등록
+                                customElements.define(isValue, ComponentClass as CustomElementConstructor, { extends: baseTag });
+                            }
                         }
                     }
                 } catch (error) {
@@ -316,7 +324,13 @@ export class ComponentUtils {
         try {
             if (!customElements.get(isValue)) {
                 const baseTag = validTags[0];
-                customElements.define(isValue, ComponentClass as CustomElementConstructor, { extends: baseTag });
+                
+                // 외부 래퍼 컴포넌트 처리 추가
+                if (ComponentUtils.isExternalWrapper(isValue)) {
+                    customElements.define(isValue, ComponentClass as CustomElementConstructor);
+                } else {
+                    customElements.define(isValue, ComponentClass as CustomElementConstructor, { extends: baseTag });
+                }
             }
             return true;
         } catch (error) {
