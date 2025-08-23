@@ -1,6 +1,6 @@
 // vite-plugin-aits-style.ts
 import type { Plugin } from 'vite';
-import { StyleSystem } from './src/styles/StyleSystem';
+import { Styler } from './src/Styler';
 
 export interface AitsStyleOptions {
   viewPaths?: string[];
@@ -10,16 +10,16 @@ export interface AitsStyleOptions {
 }
 
 export function aitsStyle(options: AitsStyleOptions = {}): Plugin {
-  let styleSystem: StyleSystem;
+  let Styler: Styler;
   
   return {
     name: 'vite-plugin-aits-style',
     
     async buildStart() {
-      styleSystem = StyleSystem.getInstance(options);
+      Styler = Styler.getInstance(options);
       
       // 초기 빌드
-      await styleSystem.build();
+      await Styler.build();
     },
     
     configureServer(server) {
@@ -30,7 +30,7 @@ export function aitsStyle(options: AitsStyleOptions = {}): Plugin {
         server.watcher.on('change', async (file) => {
           if (file.includes('view') && file.endsWith('.html')) {
             console.log(`View changed: ${file}`);
-            await styleSystem.build();
+            await Styler.build();
             
             // HMR 트리거
             server.ws.send({
@@ -43,7 +43,7 @@ export function aitsStyle(options: AitsStyleOptions = {}): Plugin {
     
     async buildEnd() {
       // 최종 빌드
-      await styleSystem.build();
+      await Styler.build();
     }
   };
 }

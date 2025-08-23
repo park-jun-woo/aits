@@ -1,29 +1,27 @@
-// src/styles/StyleSystem.ts
+// src/styles/Styler.ts
 /**
- * 재설계된 StyleSystem - 전역 스타일만 관리
+ * 재설계된 Styler - 전역 스타일만 관리
  */
-import { TokenManager } from './tokens';
-import { UtilityGenerator } from './utilities/UtilityGenerator';
+import { TokenManager } from './styles/tokens';
 import { glob } from 'fast-glob';
 import fs from 'fs/promises';
 import path from 'path';
 
-export interface StyleSystemConfig {
+export interface StylerConfig {
   viewPaths?: string[];
   outputPath?: string;
   includePaths?: string[];
   customTokens?: any;
 }
 
-export class StyleSystem {
-  private static instance: StyleSystem;
+export class Styler {
+  private static instance: Styler;
   private tokenManager: TokenManager;
-  private utilityGenerator: UtilityGenerator;
   private usedClasses: Set<string> = new Set();
   private viewStyles: Map<string, string> = new Map();
-  private config: StyleSystemConfig;
+  private config: StylerConfig;
   
-  private constructor(config: StyleSystemConfig = {}) {
+  private constructor(config: StylerConfig = {}) {
     this.config = {
       viewPaths: ['src/views/**/*.html', 'views/**/*.html'],
       outputPath: 'dist',
@@ -35,13 +33,11 @@ export class StyleSystem {
     if (config.customTokens) {
       this.tokenManager.updateTokens(config.customTokens);
     }
-    
-    this.utilityGenerator = new UtilityGenerator(this.tokenManager.getTokens());
   }
   
-  static getInstance(config?: StyleSystemConfig): StyleSystem {
+  static getInstance(config?: StylerConfig): Styler {
     if (!this.instance) {
-      this.instance = new StyleSystem(config);
+      this.instance = new Styler(config);
     }
     return this.instance;
   }
@@ -120,7 +116,6 @@ export class StyleSystem {
         classes.forEach(cls => {
           if (cls) {
             this.usedClasses.add(cls);
-            this.utilityGenerator.trackClass(cls);
           }
         });
       }
@@ -144,7 +139,6 @@ export class StyleSystem {
    */
   private async generateCSS(): Promise<{
     core: string;
-    utilities: string;
     views: string;
   }> {
     console.log('🎨 Generating CSS...');
@@ -152,13 +146,10 @@ export class StyleSystem {
     // 1. Core CSS (항상 포함)
     const core = await this.generateCoreCSS();
     
-    // 2. Utility CSS (사용된 것만)
-    const utilities = this.utilityGenerator.generateUtilities();
-    
-    // 3. View CSS
+    // 2. View CSS
     const views = this.generateViewCSS();
     
-    return { core, utilities, views };
+    return { core, views };
   }
   
   /**
@@ -216,7 +207,6 @@ export class StyleSystem {
    */
   private async outputCSS(css: {
     core: string;
-    utilities: string;
     views: string;
   }): Promise<void> {
     console.log('💾 Writing CSS files...');
@@ -232,13 +222,6 @@ export class StyleSystem {
       css.core
     );
     
-    if (css.utilities) {
-      await fs.writeFile(
-        path.join(outputDir, 'aits-utils.css'),
-        css.utilities
-      );
-    }
-    
     if (css.views) {
       await fs.writeFile(
         path.join(outputDir, 'aits-views.css'),
@@ -247,7 +230,7 @@ export class StyleSystem {
     }
     
     // Write combined file
-    const combined = [css.core, css.utilities, css.views]
+    const combined = [css.core, css.views]
       .filter(Boolean)
       .join('\n\n');
     
