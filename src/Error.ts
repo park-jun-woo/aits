@@ -15,6 +15,23 @@ import type { Aits } from './Aits';
 import type { Context } from './Context';
 import type { Model } from './Model';
 
+// Chrome의 performance.memory 타입 확장
+interface PerformanceMemory {
+  jsHeapSizeLimit: number;
+  totalJSHeapSize: number;
+  usedJSHeapSize: number;
+}
+
+interface ExtendedPerformance extends Performance {
+  memory?: PerformanceMemory;
+}
+
+declare global {
+  interface Window {
+    performance: ExtendedPerformance;
+  }
+}
+
 // ============================================================================
 // 공용 타입
 // ============================================================================
@@ -488,7 +505,7 @@ export class BoundaryValidator {
       if (error instanceof z.ZodError) {
         // AI 자동 복구 시도
         const repaired = await AISelfHealing.handleRuntimeError(
-          error,
+          error as Error,  // Type assertion 추가
           this.createRuntimeContext(),
           boundary
         );
@@ -514,29 +531,56 @@ export class BoundaryValidator {
       const defaults: any = {};
       
       for (const [key, value] of Object.entries(shape)) {
-        if (value instanceof z.ZodDefault) {
-          defaults[key] = value._def.defaultValue();
-        } else if (value instanceof z.ZodOptional) {
+        const zodValue = value as z.ZodTypeAny;
+        
+        // default() 메서드가 있는 경우 처리
+        if ('_def' in zodValue && (zodValue._def as any).defaultValue) {
+          defaults[key] = (zodValue._def as any).defaultValue();
+        } else if (zodValue instanceof z.ZodOptional) {
           defaults[key] = undefined;
-        } else {
+        } else if (zodValue instanceof z.ZodNullable) {
           defaults[key] = null;
+        } else {
+          // 타입에 따른 기본값 설정
+          if (zodValue instanceof z.ZodString) {
+            defaults[key] = '';
+          } else if (zodValue instanceof z.ZodNumber) {
+            defaults[key] = 0;
+          } else if (zodValue instanceof z.ZodBoolean) {
+            defaults[key] = false;
+          } else if (zodValue instanceof z.ZodArray) {
+            defaults[key] = [];
+          } else if (zodValue instanceof z.ZodObject) {
+            defaults[key] = {};
+          } else {
+            defaults[key] = null;
+          }
         }
       }
       
       return defaults;
     }
     
+    // 기본 타입들의 기본값
+    if (schema instanceof z.ZodString) return '';
+    if (schema instanceof z.ZodNumber) return 0;
+    if (schema instanceof z.ZodBoolean) return false;
+    if (schema instanceof z.ZodArray) return [];
+    if (schema instanceof z.ZodNull) return null;
+    if (schema instanceof z.ZodUndefined) return undefined;
+    
     return null;
   }
   
   private static createRuntimeContext(): RuntimeContext {
+    const perf = window.performance as ExtendedPerformance;
     return {
       timestamp: new Date(),
       url: window.location.href,
       userAgent: navigator.userAgent,
-      memory: performance.memory ? {
-        used: performance.memory.usedJSHeapSize,
-        limit: performance.memory.jsHeapSizeLimit
+      memory: perf.memory ? {
+        used: perf.memory.usedJSHeapSize,
+        limit: perf.memory.jsHeapSizeLimit
       } : undefined,
       previousErrors: []
     };
@@ -640,13 +684,14 @@ export class CircuitBreaker {
       }
     });
     
+    const perf = window.performance as ExtendedPerformance;
     return {
       timestamp: new Date(),
       url: window.location.href,
       userAgent: navigator.userAgent,
-      memory: performance.memory ? {
-        used: performance.memory.usedJSHeapSize,
-        limit: performance.memory.jsHeapSizeLimit
+      memory: perf.memory ? {
+        used: perf.memory.usedJSHeapSize,
+        limit: perf.memory.jsHeapSizeLimit
       } : undefined,
       previousErrors: errors
     };
@@ -743,9 +788,10 @@ export class GlobalErrorHandler {
     });
     
     // 메모리 압박 감지
-    if ('memory' in performance) {
+    const perf = window.performance as ExtendedPerformance;
+    if (perf.memory) {
       setInterval(() => {
-        const memory = (performance as any).memory;
+        const memory = perf.memory!;
         const usage = memory.usedJSHeapSize / memory.jsHeapSizeLimit;
         
         if (usage > 0.9) {
@@ -764,13 +810,14 @@ export class GlobalErrorHandler {
   }
   
   private static createRuntimeContext(): RuntimeContext {
+    const perf = window.performance as ExtendedPerformance;
     return {
       timestamp: new Date(),
       url: window.location.href,
       userAgent: navigator.userAgent,
-      memory: performance.memory ? {
-        used: performance.memory.usedJSHeapSize,
-        limit: performance.memory.jsHeapSizeLimit
+      memory: perf.memory ? {
+        used: perf.memory.usedJSHeapSize,
+        limit: perf.memory.jsHeapSizeLimit
       } : undefined,
       previousErrors: []
     };
@@ -820,6 +867,19 @@ export class GlobalErrorHandler {
 // Export
 // ============================================================================
 
+// UUID 생성 폴리필
+const generateUUID = (): string => {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+    return crypto.randomUUID();
+  }
+  // Fallback UUID v4 생성
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = Math.random() * 16 | 0;
+    const v = c === 'x' ? r : (r & 0x3 | 0x8);
+    return v.toString(16);
+  });
+};
+
 export const ErrorSystem = {
   // AI 자가 치유
   ai: AISelfHealing,
@@ -858,8 +918,9 @@ export const ErrorSystem = {
 };
 
 // CSS 애니메이션 주입
-if (typeof document !== 'undefined') {
+if (typeof document !== 'undefined' && !document.getElementById('aits-error-styles')) {
   const style = document.createElement('style');
+  style.id = 'aits-error-styles';
   style.textContent = `
     @keyframes slideIn {
       from { transform: translateX(100%); opacity: 0; }
@@ -882,6 +943,7 @@ if (typeof document !== 'undefined') {
       color: #000;
       padding: 4px 16px;
       font-size: 12px;
+      font-family: system-ui, -apple-system, sans-serif;
       z-index: 9999;
     }
   `;

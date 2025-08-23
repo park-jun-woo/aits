@@ -31,7 +31,8 @@
   "dependencies": {
     "fast-glob": "^3.3.3",
     "glob": "^11.0.3",
-    "navigo": "^8.11.1"
+    "navigo": "^8.11.1",
+    "zod": "^4.0.17"
   },
   "devDependencies": {
     "@types/glob": "^8.1.0",
