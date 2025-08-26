@@ -1,28 +1,24 @@
 {
   "compilerOptions": {
-    "target": "ES2020",
+    "target": "ES2022",
     "module": "ESNext",
-    "moduleResolution": "bundler",
-    "resolveJsonModule": true,
-    "esModuleInterop": true,
-    "allowSyntheticDefaultImports": true,
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "moduleResolution": "Bundler",
     "strict": true,
+    "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "declaration": true,
-    "outDir": "./dist",
-    "rootDir": "./src",
-    "baseUrl": "./",
+    "declarationMap": true,
+    "sourceMap": true,
+    "composite": true,
     "paths": {
-      "@/*": ["src/*"]
-    },
-    "types": ["vite/client", "node"]
-  },
-  "include": [
-    "src/**/*"
-, "plugin/tokens"  ],
-  "exclude": [
-    "node_modules",
-    "dist"
-  ]
+      "@aits/core": ["./packages/core/src/index.ts"],
+      "@aits/core/*": ["./packages/core/src/*"],
+      "@aits/bridge-shoelace": ["./packages/bridge-shoelace/src/index.ts"],
+      "@aits/bridge-material": ["./packages/bridge-material/src/index.ts"],
+      "@aits/bridge-ionic": ["./packages/bridge-ionic/src/index.ts"],
+      "@aits/bridge-chartjs": ["./packages/bridge-chartjs/src/index.ts"]
+    }
+  }
 }
