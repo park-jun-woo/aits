@@ -2,6 +2,7 @@
 import { defineConfig } from 'vite';
 import { resolve } from 'path';
 import { aitsStyle } from './plugin/vite-plugin-styler';
+import { defect } from './plugin/vite-plugin-defect';
 
 export default defineConfig({
 	build: {
@@ -20,7 +21,16 @@ export default defineConfig({
 		}
 	},
 	plugins: [
-		aitsStyle()
+		aitsStyle(),
+		defect({
+			enabled: true,
+			enableBuildTime: true,
+			enableRuntime: true,
+			autoFix: true,
+			showOverlay: true,
+			reportLevel: 'warning',
+			outputFile: 'defect-report.json'
+		})
 	],
 	css: {
 		postcss: './postcss.config.js'

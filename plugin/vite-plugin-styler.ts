@@ -10,16 +10,16 @@ export interface AitsStyleOptions {
 }
 
 export function aitsStyle(options: AitsStyleOptions = {}): Plugin {
-  let Styler: Styler;
+  let stylerInstance: Styler;  // 변수명 변경
   
   return {
     name: 'vite-plugin-aits-style',
     
     async buildStart() {
-      Styler = Styler.getInstance(options);
+      stylerInstance = Styler.getInstance(options);  // 수정됨
       
       // 초기 빌드
-      await Styler.build();
+      await stylerInstance.build();  // 수정됨
     },
     
     configureServer(server) {
@@ -30,7 +30,7 @@ export function aitsStyle(options: AitsStyleOptions = {}): Plugin {
         server.watcher.on('change', async (file) => {
           if (file.includes('view') && file.endsWith('.html')) {
             console.log(`View changed: ${file}`);
-            await Styler.build();
+            await stylerInstance.build();  // 수정됨
             
             // HMR 트리거
             server.ws.send({
@@ -43,7 +43,7 @@ export function aitsStyle(options: AitsStyleOptions = {}): Plugin {
     
     async buildEnd() {
       // 최종 빌드
-      await Styler.build();
+      await stylerInstance.build();  // 수정됨
     }
   };
 }
