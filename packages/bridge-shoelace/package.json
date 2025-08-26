@@ -22,10 +22,11 @@
     "prepublishOnly": "npm run clean && npm run build"
   },
   "peerDependencies": {
-    "@aits/core": "file:../core",
+    "@aits/core": "^0.5.0",
     "@shoelace-style/shoelace": "^2.15.0"
   },
   "devDependencies": {
+    "@aits/core": "file:../core",
     "typescript": "^5.3.0",
     "@types/node": "^20.0.0"
   },
