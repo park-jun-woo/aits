@@ -35,6 +35,13 @@
     "zod": "^4.0.17"
   },
   "devDependencies": {
+    "@babel/core": "^7.28.3",
+    "@babel/generator": "^7.28.3",
+    "@babel/parser": "^7.28.3",
+    "@babel/traverse": "^7.28.3",
+    "@types/babel__core": "^7.20.5",
+    "@types/babel__generator": "^7.27.0",
+    "@types/babel__traverse": "^7.28.0",
     "@types/glob": "^8.1.0",
     "@types/node": "^20.0.0",
     "typescript": "^5.2.2",

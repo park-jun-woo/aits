@@ -1,6 +1,6 @@
-// vite-plugin-aits-style.ts
+// vite-plugin-styler.ts
 import type { Plugin } from 'vite';
-import { Styler } from './src/Styler';
+import { Styler } from './styler/Styler';
 
 export interface AitsStyleOptions {
   viewPaths?: string[];

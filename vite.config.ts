@@ -1,7 +1,7 @@
 // vite.config.ts
 import { defineConfig } from 'vite';
 import { resolve } from 'path';
-import { aitsCSS } from './vite-plugin-aits-css';
+import { aitsStyle } from './plugin/vite-plugin-styler';
 
 export default defineConfig({
 	build: {
@@ -20,7 +20,7 @@ export default defineConfig({
 		}
 	},
 	plugins: [
-		aitsCSS()
+		aitsStyle()
 	],
 	css: {
 		postcss: './postcss.config.js'

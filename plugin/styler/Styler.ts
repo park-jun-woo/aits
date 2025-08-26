@@ -2,7 +2,7 @@
 /**
  * 재설계된 Styler - 전역 스타일만 관리
  */
-import { TokenManager } from './styles/tokens';
+import { TokenManager } from './tokens';
 import { glob } from 'fast-glob';
 import fs from 'fs/promises';
 import path from 'path';
