@@ -3,13 +3,25 @@
   "compilerOptions": {
     "outDir": "./dist",
     "rootDir": "./src",
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "paths": {
-      "@/Bridge": ["../../src/Bridge"],
-      "@/*": ["../../src/*"]
+      "@aits/core": ["../../packages/core/src/index.ts"],
+      "@aits/core/*": ["../../packages/core/src/*"]
     }
   },
   "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist"],
   "references": [
-    { "path": "../.." }  // 메인 프로젝트 참조
+    { "path": "../core" }
   ]
 }

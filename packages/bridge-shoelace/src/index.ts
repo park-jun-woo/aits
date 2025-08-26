@@ -1,8 +1,21 @@
-//import type { BridgePreset } from '@aits/core';
+import { registerBridge, BridgeUtils } from '@aits/core';
 import { shoelacePreset } from './preset';
-import { toast, createDialog, createDrawer, confirm, setTheme } from './helpers';
+import { 
+  toast, 
+  createDialog, 
+  createDrawer, 
+  confirm, 
+  setTheme,
+  prompt,
+  waitForComponent,
+  waitForAllComponents
+} from './helpers';
 
-// 메인 프리셋 export
+// 타입 export
+export * from './types';
+
+// 프리셋 export
+export { shoelacePreset };
 export default shoelacePreset;
 
 // 헬퍼 함수들 export
@@ -11,47 +24,73 @@ export {
   createDialog,
   createDrawer,
   confirm,
-  setTheme
+  setTheme,
+  prompt,
+  waitForComponent,
+  waitForAllComponents
 };
 
-// 타입들 export
-export * from './types';
-
-// 편의 함수: 자동 등록
-export function registerShoelace(): void {
-  if (typeof window !== 'undefined') {
-    // 동적 import로 순환 참조 방지
-    import('@aits/core').then(({ registerBridge }) => {
-      registerBridge(shoelacePreset);
-      
-      // 자동 setup 실행
-      if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', () => {
-          shoelacePreset.setup?.('client');
-        });
-      } else {
-        shoelacePreset.setup?.('client');
-      }
-    });
-  }
-}
-
-// 전역 설정 옵션
+// 설정 옵션
 export interface ShoelaceConfig {
   theme?: 'light' | 'dark' | 'auto';
   basePath?: string;
   autoRegister?: boolean;
+  autoTransform?: boolean;
 }
 
-// 초기화 함수
+/**
+ * Shoelace 브리지 초기화
+ */
 export async function initShoelace(config: ShoelaceConfig = {}): Promise<void> {
   // 테마 설정
   if (config.theme) {
     setTheme(config.theme);
   }
   
-  // 자동 등록
-  if (config.autoRegister !== false) {
-    registerShoelace();
+  // basePath 설정
+  if (config.basePath && (window as any).setBasePath) {
+    (window as any).setBasePath(config.basePath);
   }
+  
+  // 브리지 등록
+  if (config.autoRegister !== false) {
+    registerBridge(shoelacePreset);
+  }
+  
+  // 자동 변환 시작
+  if (config.autoTransform) {
+    BridgeUtils.startAutoTransform();
+  }
+  
+  console.log('[Shoelace] Bridge initialized');
+}
+
+// DOM 준비 시 자동 초기화
+if (typeof window !== 'undefined') {
+  // 전역 네임스페이스 등록
+  (window as any).ShoelaceBridge = {
+    init: initShoelace,
+    preset: shoelacePreset,
+    toast,
+    createDialog,
+    createDrawer,
+    confirm,
+    prompt,
+    setTheme,
+    waitForComponent,
+    waitForAllComponents
+  };
+  
+  // data-auto-init 속성이 있으면 자동 초기화
+  document.addEventListener('DOMContentLoaded', () => {
+    const script = document.querySelector('script[data-shoelace-auto-init]');
+    if (script) {
+      const config: ShoelaceConfig = {
+        autoRegister: true,
+        autoTransform: true,
+        theme: script.getAttribute('data-theme') as any || 'auto'
+      };
+      initShoelace(config);
+    }
+  });
 }

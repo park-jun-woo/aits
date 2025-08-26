@@ -11,36 +11,20 @@ export const componentTransforms: Record<string, ComponentTransform> = {
     attributes: (el) => {
       const attrs: Record<string, any> = {};
       
-      // variant 매핑
-      const variant = el.getAttribute('variant');
-      if (variant) {
-        const variantMap: Record<string, string> = {
-          'primary': 'primary',
-          'secondary': 'default',
-          'success': 'success',
-          'warning': 'warning',
-          'danger': 'danger',
-          'neutral': 'neutral'
-        };
-        attrs.variant = variantMap[variant] || variant;
-      }
-      
-      // size 매핑
-      const size = el.getAttribute('size');
-      if (size) attrs.size = size;
-      
-      // 기타 속성
-      ['disabled', 'loading', 'pill', 'circle', 'type', 'href', 'target', 'download'].forEach(attr => {
-        const value = el.getAttribute(attr);
-        if (value !== null) attrs[attr] = value === '' ? true : value;
+      // 모든 속성을 camelCase로 변환
+      Array.from(el.attributes).forEach(attr => {
+        if (attr.name !== 'is') {
+          const camelCase = attr.name.replace(/-([a-z])/g, (g) => g[1].toUpperCase());
+          attrs[camelCase] = attr.value === '' ? true : attr.value;
+        }
       });
       
       return attrs;
     },
     events: (ctx) => ({
+      'click': ctx.forward('click'),
       'sl-blur': ctx.forward('blur'),
-      'sl-focus': ctx.forward('focus'),
-      'click': ctx.forward('click')
+      'sl-focus': ctx.forward('focus')
     })
   },
   
@@ -120,7 +104,9 @@ export const componentTransforms: Record<string, ComponentTransform> = {
       'sl-clear': ctx.forward('clear'),
       'sl-focus': ctx.forward('focus'),
       'sl-show': ctx.forward('show'),
-      'sl-hide': ctx.forward('hide')
+      'sl-hide': ctx.forward('hide'),
+      'sl-after-show': ctx.forward('after-show'),
+      'sl-after-hide': ctx.forward('after-hide')
     })
   },
   
@@ -192,12 +178,12 @@ export const componentTransforms: Record<string, ComponentTransform> = {
       return attrs;
     },
     events: (ctx) => ({
-      'sl-show': ctx.forward('open'),
-      'sl-after-show': ctx.forward('opened'),
-      'sl-hide': ctx.forward('close'),
-      'sl-after-hide': ctx.forward('closed'),
-      'sl-initial-focus': ctx.forward('initialfocus'),
-      'sl-request-close': ctx.forward('requestclose')
+      'sl-show': ctx.forward('show'),
+      'sl-after-show': ctx.forward('after-show'),
+      'sl-hide': ctx.forward('hide'),
+      'sl-after-hide': ctx.forward('after-hide'),
+      'sl-initial-focus': ctx.forward('initial-focus'),
+      'sl-request-close': ctx.forward('request-close')
     })
   },
   
@@ -218,12 +204,12 @@ export const componentTransforms: Record<string, ComponentTransform> = {
       return attrs;
     },
     events: (ctx) => ({
-      'sl-show': ctx.forward('open'),
-      'sl-after-show': ctx.forward('opened'),
-      'sl-hide': ctx.forward('close'),
-      'sl-after-hide': ctx.forward('closed'),
-      'sl-initial-focus': ctx.forward('initialfocus'),
-      'sl-request-close': ctx.forward('requestclose')
+      'sl-show': ctx.forward('show'),
+      'sl-after-show': ctx.forward('after-show'),
+      'sl-hide': ctx.forward('hide'),
+      'sl-after-hide': ctx.forward('after-hide'),
+      'sl-initial-focus': ctx.forward('initial-focus'),
+      'sl-request-close': ctx.forward('request-close')
     })
   },
   
@@ -244,9 +230,9 @@ export const componentTransforms: Record<string, ComponentTransform> = {
     },
     events: (ctx) => ({
       'sl-show': ctx.forward('show'),
-      'sl-after-show': ctx.forward('shown'),
+      'sl-after-show': ctx.forward('after-show'),
       'sl-hide': ctx.forward('hide'),
-      'sl-after-hide': ctx.forward('hidden')
+      'sl-after-hide': ctx.forward('after-hide')
     })
   },
   
@@ -263,9 +249,9 @@ export const componentTransforms: Record<string, ComponentTransform> = {
     },
     events: (ctx) => ({
       'sl-show': ctx.forward('show'),
-      'sl-after-show': ctx.forward('shown'),
+      'sl-after-show': ctx.forward('after-show'),
       'sl-hide': ctx.forward('hide'),
-      'sl-after-hide': ctx.forward('hidden')
+      'sl-after-hide': ctx.forward('after-hide')
     })
   },
   
@@ -284,13 +270,13 @@ export const componentTransforms: Record<string, ComponentTransform> = {
       return attrs;
     },
     events: (ctx) => ({
-      'sl-tab-show': ctx.forward('tabshow'),
-      'sl-tab-hide': ctx.forward('tabhide')
+      'sl-tab-show': ctx.forward('tab-show'),
+      'sl-tab-hide': ctx.forward('tab-hide')
     })
   }
 };
 
-// 기본 변환 규칙 (정의되지 않은 컴포넌트용)
+// 기본 변환 규칙
 export const defaultTransform: ComponentTransform = {
   attributes: (el) => {
     const attrs: Record<string, any> = {};

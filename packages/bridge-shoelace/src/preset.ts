@@ -21,20 +21,23 @@ export const shoelacePreset: BridgePreset = {
     const themeLink = document.createElement('link');
     themeLink.rel = 'stylesheet';
     themeLink.href = 'https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.15.1/cdn/themes/light.css';
+    themeLink.id = 'shoelace-theme-light';
     document.head.appendChild(themeLink);
     
-    // 다크 테마 지원 (옵션)
+    // 다크 테마 지원
     if (window.matchMedia?.('(prefers-color-scheme: dark)').matches) {
       const darkLink = document.createElement('link');
       darkLink.rel = 'stylesheet';
       darkLink.href = 'https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.15.1/cdn/themes/dark.css';
       darkLink.media = '(prefers-color-scheme: dark)';
+      darkLink.id = 'shoelace-theme-dark';
       document.head.appendChild(darkLink);
     }
     
     // Shoelace 자동 로더
     const script = document.createElement('script');
     script.type = 'module';
+    script.id = 'shoelace-autoloader';
     script.src = 'https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.15.1/cdn/shoelace-autoloader.js';
     
     await new Promise<void>((resolve, reject) => {
@@ -52,12 +55,29 @@ export const shoelacePreset: BridgePreset = {
     
     // CSS 변수 설정
     const style = document.createElement('style');
+    style.id = 'shoelace-custom-styles';
     style.textContent = `
       :root {
         --sl-color-primary-600: var(--aits-color-primary, #3b82f6);
         --sl-border-radius-medium: var(--aits-radius-md, 0.375rem);
         --sl-spacing-medium: var(--aits-spacing-md, 1rem);
         --sl-font-sans: var(--aits-font-family, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
+      }
+      
+      /* Z-index 조정 */
+      sl-dialog::part(panel),
+      sl-drawer::part(panel) {
+        z-index: var(--sl-z-index-dialog, 700);
+      }
+      
+      sl-tooltip::part(popup) {
+        z-index: var(--sl-z-index-tooltip, 800);
+      }
+      
+      /* 애니메이션 개선 */
+      sl-dialog,
+      sl-drawer {
+        --sl-transition-medium: 250ms cubic-bezier(0.4, 0, 0.2, 1);
       }
     `;
     document.head.appendChild(style);
@@ -68,7 +88,7 @@ export const shoelacePreset: BridgePreset = {
   
   transform(el: Element, ctx: BridgeContext): void {
     const isValue = el.getAttribute('is');
-    if (!isValue) return;
+    if (!isValue?.startsWith('sl-')) return;
     
     const tagName = isValue;
     
@@ -87,17 +107,24 @@ export const shoelacePreset: BridgePreset = {
     // 이벤트 설정
     const events = transform.events?.(ctx) || {};
     
-    // 슬롯 처리 (필요한 경우)
-    if (transform.slots) {
-      const slots = transform.slots(el);
-      // 슬롯 처리 로직...
-    }
-    
     // 요소 교체
     ctx.replaceWith(tagName, {
       attrs,
       events,
       slots: children
     });
+  },
+  
+  destroy(): void {
+    // 추가된 스타일과 스크립트 제거
+    document.getElementById('shoelace-theme-light')?.remove();
+    document.getElementById('shoelace-theme-dark')?.remove();
+    document.getElementById('shoelace-autoloader')?.remove();
+    document.getElementById('shoelace-custom-styles')?.remove();
+    
+    shoelaceLoaded = false;
+    basePath = null;
+    
+    console.log('[Shoelace] Bridge destroyed');
   }
 };

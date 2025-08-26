@@ -6,5 +6,7 @@ export {
   unregisterBridge,
   getAllBridges,
   findBridge,
-  createBridgeContext
+  clearBridges,
+  createBridgeContext,
+  BridgeUtils
 } from './Bridge';
