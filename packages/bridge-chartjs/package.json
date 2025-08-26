@@ -1,0 +1,40 @@
+{
+  "name": "@aits/bridge-chartjs",
+  "version": "0.1.0",
+  "description": "Chart.js bridge for AITS Framework",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist"
+  },
+  "peerDependencies": {
+    "@aits/core": "^0.5.0",
+    "chart.js": "^4.0.0"
+  },
+  "devDependencies": {
+    "@aits/core": "file:../core",
+    "typescript": "^5.3.0",
+    "@types/node": "^20.0.0"
+  },
+  "keywords": [
+    "aits",
+    "bridge",
+    "chartjs",
+    "charts",
+    "visualization"
+  ],
+  "license": "MIT"
+}
