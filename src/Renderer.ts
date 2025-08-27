@@ -21,7 +21,12 @@ import {
 } from './components';
 
 // Bridge 시스템 import
-import { BridgeRegistry, BridgeUtils } from './Bridge';
+import { 
+    findBridge,
+    getAllBridges,
+    BridgeUtils,
+    type BridgePreset 
+} from '@aits/core';
 
 // 레이아웃 구성을 정의하는 인터페이스
 export interface LayoutConfig {
@@ -348,11 +353,12 @@ export class Renderer {
             }
             
             // 1. 먼저 외부 웹 컴포넌트인지 확인 (Bridge 시스템)
-            const bridge = BridgeRegistry.findBridge(isValue);
+            const bridge = findBridge(htmlElement);
             if (bridge) {
-                const webComponent = await bridge.transform(htmlElement);
-                if (webComponent) {
-                    this._registerComponent(webComponent, isValue, true);
+                // BridgeContext 생성 및 변환
+                const transformed = await BridgeUtils.transformElement(htmlElement);
+                if (transformed && transformed instanceof HTMLElement) {
+                    this._registerComponent(transformed, isValue, true);
                     continue;
                 }
             }
@@ -470,10 +476,10 @@ export class Renderer {
             const isValue = container.getAttribute('is');
             if (isValue && !this.componentsByElement.has(container)) {
                 // 외부 웹 컴포넌트 확인
-                const bridge = BridgeRegistry.findBridge(isValue);
+                const bridge = findBridge(container);
                 if (bridge) {
-                    const webComponent = await bridge.transform(container);
-                    if (webComponent) {
+                    const webComponent = await BridgeUtils.transformElement(container);
+                    if (webComponent && webComponent instanceof HTMLElement) {
                         this._registerComponent(webComponent, isValue, true);
                     }
                 } 
@@ -496,10 +502,10 @@ export class Renderer {
             if (!isValue || this.componentsByElement.has(htmlElement)) continue;
             
             // 외부 웹 컴포넌트 확인
-            const bridge = BridgeRegistry.findBridge(isValue);
+            const bridge = findBridge(htmlElement);
             if (bridge) {
-                const webComponent = await bridge.transform(htmlElement);
-                if (webComponent) {
+                const webComponent = await BridgeUtils.transformElement(htmlElement);
+                if (webComponent && webComponent instanceof HTMLElement) {
                     this._registerComponent(webComponent, isValue, true);
                 }
             }
@@ -959,30 +965,27 @@ export class Renderer {
         this.containers.root?.remove();
         
         // Bridge 정리
-        BridgeRegistry.getAll().forEach(bridge => bridge.destroy());
+        getAllBridges().forEach(bridge => {
+            if (bridge.destroy) {
+                bridge.destroy();
+            }
+        });
     }
     
     // === Bridge 관련 메서드 ===
     
     /**
-     * 특정 Bridge 등록
-     */
-    public registerBridge(bridge: any): void {
-        // Bridge는 생성자에서 자동 등록되므로, 인스턴스만 생성하면 됨
-        console.log(`[Renderer] Bridge registered`);
-    }
-    
-    /**
      * 모든 등록된 Bridge 가져오기
      */
-    public getBridges(): any[] {
-        return BridgeRegistry.getAll();
+    public getBridges(): BridgePreset[] {
+        return getAllBridges();
     }
     
     /**
      * 특정 요소를 수동으로 변환
      */
     public async transformElement(element: HTMLElement): Promise<HTMLElement | null> {
-        return BridgeUtils.transformElement(element);
+        const result = await BridgeUtils.transformElement(element);
+        return result instanceof HTMLElement ? result : null;
     }
 }
