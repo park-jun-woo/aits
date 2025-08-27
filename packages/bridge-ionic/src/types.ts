@@ -102,42 +102,39 @@ export interface IonRange extends HTMLElement {
 
 // Input & Text
 export interface IonInput extends HTMLElement {
-    accept?: string;
-    autocapitalize?: string;
-    autocomplete?: string;
-    autocorrect?: string;
-    autofocus: boolean;
+    type: string;
+    name: string;
+    value: string;
+    size: 'small' | 'medium' | 'large';
+    filled: boolean;
+    pill: boolean;
+    label?: string;
+    labelPlacement?: 'end' | 'fixed' | 'floating' | 'stacked' | 'start';
+    helperText?: string;
+    errorText?: string;
+    placeholder?: string;
+    disabled: boolean;
+    readonly: boolean;
+    required: boolean;
     clearInput: boolean;
     clearOnEdit?: boolean;
     color?: string;
     counter?: boolean;
     counterFormatter?: (inputLength: number, maxLength: number) => string;
     debounce?: number;
-    disabled: boolean;
     enterkeyhint?: string;
-    errorText?: string;
     fill?: 'outline' | 'solid';
-    helperText?: string;
-    // inputmode is already in HTMLElement
-    label?: string;
-    labelPlacement?: 'end' | 'fixed' | 'floating' | 'stacked' | 'start';
     max?: string | number;
     maxlength?: number;
     min?: string | number;
     minlength?: number;
     mode?: 'ios' | 'md';
     multiple?: boolean;
-    name: string;
     pattern?: string;
-    placeholder?: string;
-    readonly: boolean;
-    required: boolean;
     shape?: 'round';
-    size?: number;
-    spellcheck?: boolean;
     step?: string;
-    type?: string;
-    value?: string | number | null;
+    autocomplete?: string;
+    // autocorrect, spellcheck, autocapitalize, inputmode는 HTMLElement에 이미 정의되어 있으므로 제거
     
     getInputElement(): Promise<HTMLInputElement>;
     setFocus(): Promise<void>;
@@ -145,7 +142,6 @@ export interface IonInput extends HTMLElement {
 
 export interface IonTextarea extends HTMLElement {
     autoGrow: boolean;
-    autocapitalize?: string;
     autofocus: boolean;
     clearOnEdit: boolean;
     color?: string;
@@ -169,9 +165,9 @@ export interface IonTextarea extends HTMLElement {
     required: boolean;
     rows?: number;
     shape?: 'round';
-    spellcheck?: boolean;
     value?: string | null;
     wrap?: 'hard' | 'off' | 'soft';
+    // autocapitalize, spellcheck는 HTMLElement에 이미 정의되어 있으므로 제거
     
     getInputElement(): Promise<HTMLTextAreaElement>;
     setFocus(): Promise<void>;
@@ -180,7 +176,6 @@ export interface IonTextarea extends HTMLElement {
 export interface IonSearchbar extends HTMLElement {
     animated: boolean;
     autocomplete?: string;
-    autocorrect?: string;
     cancelButtonIcon?: string;
     cancelButtonText?: string;
     clearIcon?: string;
@@ -188,15 +183,14 @@ export interface IonSearchbar extends HTMLElement {
     debounce?: number;
     disabled: boolean;
     enterkeyhint?: string;
-    inputmode?: string;
     mode?: 'ios' | 'md';
     placeholder?: string;
     searchIcon?: string;
     showCancelButton?: 'always' | 'focus' | 'never';
     showClearButton?: 'always' | 'focus' | 'never';
-    spellcheck?: boolean;
     type?: 'email' | 'number' | 'password' | 'search' | 'tel' | 'text' | 'url';
     value?: string | null;
+    // autocorrect, spellcheck, inputmode는 HTMLElement에 이미 정의되어 있으므로 제거
     
     getInputElement(): Promise<HTMLInputElement>;
     setFocus(): Promise<void>;
@@ -285,6 +279,15 @@ export interface IonSegmentButton extends HTMLElement {
     mode?: 'ios' | 'md';
     type?: 'button' | 'submit' | 'reset';
     value?: string;
+}
+
+// HTMLIonTabElement 타입 정의 추가
+export interface HTMLIonTabElement extends HTMLElement {
+    component?: Function | HTMLElement | null | string;
+    delegate?: any;
+    tab: string;
+    active: boolean;
+    setActive(): Promise<void>;
 }
 
 export interface IonTabs extends HTMLElement {
@@ -414,6 +417,7 @@ export interface IonModal extends HTMLElement {
     showBackdrop: boolean;
     translucent: boolean;
     trigger?: string;
+    cssClass?: string | string[];  // 추가
     
     dismiss(data?: any, role?: string): Promise<boolean>;
     onDidDismiss<T = any>(): Promise<OverlayEventDetail<T>>;
